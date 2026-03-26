@@ -1,19 +1,27 @@
 # KubeQuest — Phase 2: Kubernetes Cluster Bootstrap
-> kubeadm | kube-1 + kube-2
+> kubeadm | Amazon Linux 2023 | kube-1 + kube-2
 
 ---
 
 ## Overview
 
-Initialize a 2-node Kubernetes cluster using `kubeadm`.
+Initialize a 2-node Kubernetes cluster using `kubeadm` on Amazon Linux 2023.
 `kube-1` acts as the control plane + worker, `kube-2` as an additional worker.
+
+> This guide uses `yum`/`dnf` — the correct package manager for Amazon Linux 2023.
+> SSH user is `ec2-user`, not `ubuntu`.
 
 ---
 
 ## Prerequisites
 
 - Phase 1 complete — all 4 VMs running and SSH accessible
-- SSH into `kube-1` and `kube-2` before starting
+- Run each section on the correct machine as indicated
+
+```bash
+# SSH into nodes
+ssh -i ~/.ssh/kubequest.pem ec2-user@<node-ip>
+```
 
 ---
 
@@ -47,51 +55,95 @@ EOF
 sudo sysctl --system
 ```
 
+---
+
 ### Install containerd
+
 ```bash
-sudo apt-get update
-sudo apt-get install -y containerd
+sudo yum install -y containerd
 
 sudo mkdir -p /etc/containerd
 containerd config default | sudo tee /etc/containerd/config.toml
 
-# Enable SystemdCgroup
+# Enable SystemdCgroup — required for kubeadm
 sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
 
 sudo systemctl restart containerd
 sudo systemctl enable containerd
 ```
 
-### Install kubeadm, kubelet, kubectl
+Verify:
 ```bash
-sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+sudo systemctl status containerd
+```
 
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | \
-  sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+---
 
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
-  https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | \
-  sudo tee /etc/apt/sources.list.d/kubernetes.list
+### Install kubeadm, kubelet, kubectl
 
-sudo apt-get update
-sudo apt-get install -y kubelet kubeadm kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
+Add the Kubernetes yum repository:
+
+```bash
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+EOF
+```
+
+Install the packages:
+
+```bash
+sudo yum install -y kubelet kubeadm kubectl \
+  --disableexcludes=kubernetes
+
+# Enable kubelet on boot
+sudo systemctl enable kubelet
+```
+
+Pin versions to prevent accidental upgrades:
+```bash
+sudo yum versionlock add kubelet kubeadm kubectl
+# If versionlock plugin is not installed:
+sudo yum install -y 'dnf-command(versionlock)'
+sudo yum versionlock add kubelet kubeadm kubectl
+```
+
+Verify:
+```bash
+kubeadm version
+kubectl version --client
 ```
 
 ---
 
 ## Step 2 — Initialize Control Plane (kube-1 only)
 
+SSH into `kube-1`:
+```bash
+ssh -i ~/.ssh/kubequest.pem ec2-user@$KUBE1_IP
+```
+
+Get the private IP:
+```bash
+PRIVATE_IP=$(hostname -I | awk '{print $1}')
+echo "Private IP: $PRIVATE_IP"
+```
+
+Initialize the cluster:
 ```bash
 sudo kubeadm init \
   --pod-network-cidr=10.244.0.0/16 \
-  --apiserver-advertise-address=<kube-1-private-ip>
+  --apiserver-advertise-address=$PRIVATE_IP
 ```
 
-> Use the **private IP** of kube-1, not the public one.
+> Use the **private IP**, not the public one. It stays stable across restarts.
 
-### Set up kubectl access
+### Set up kubectl for ec2-user
 ```bash
 mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
@@ -99,14 +151,15 @@ sudo chown $(id -u):$(id -g) $HOME/.kube/config
 ```
 
 ### Save the join command
-At the end of `kubeadm init` output, you'll see something like:
-```bash
-kubeadm join <kube-1-private-ip>:6443 --token <token> \
+At the end of `kubeadm init` output you will see something like:
+```
+kubeadm join <private-ip>:6443 --token <token> \
   --discovery-token-ca-cert-hash sha256:<hash>
 ```
-**Copy and save this — you'll need it for kube-2.**
 
-If you lose it, regenerate with:
+**Copy and save this — you need it for Step 4.**
+
+If you lose it:
 ```bash
 kubeadm token create --print-join-command
 ```
@@ -115,24 +168,32 @@ kubeadm token create --print-join-command
 
 ## Step 3 — Install CNI Plugin (kube-1 only)
 
-### Option A — Flannel (simpler)
+### Option A — Flannel (recommended)
 ```bash
 kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 ```
 
-### Option B — Calico (more features)
+### Option B — Calico
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
 ```
 
-> Both work fine for this project. Flannel is recommended for simplicity.
+Verify pods are coming up:
+```bash
+kubectl get pods -n kube-flannel   # Flannel
+kubectl get pods -n kube-system    # Calico
+```
 
 ---
 
 ## Step 4 — Join Worker Node (kube-2 only)
 
-SSH into `kube-2` and run the join command saved from Step 2:
+SSH into `kube-2`:
+```bash
+ssh -i ~/.ssh/kubequest.pem ec2-user@$KUBE2_IP
+```
 
+Run the join command from Step 2:
 ```bash
 sudo kubeadm join <kube-1-private-ip>:6443 --token <token> \
   --discovery-token-ca-cert-hash sha256:<hash>
@@ -142,11 +203,12 @@ sudo kubeadm join <kube-1-private-ip>:6443 --token <token> \
 
 ## Step 5 — Verify the Cluster (kube-1)
 
+Back on `kube-1`:
 ```bash
 kubectl get nodes
 ```
 
-Expected output (may take 1-2 minutes to become Ready):
+Expected output (may take 1-2 minutes):
 ```
 NAME     STATUS   ROLES           AGE   VERSION
 kube-1   Ready    control-plane   5m    v1.29.x
@@ -154,16 +216,12 @@ kube-2   Ready    <none>          2m    v1.29.x
 ```
 
 ```bash
-# Check all system pods are running
-kubectl get pods -n kube-system
+kubectl get pods --all-namespaces
 ```
 
 ---
 
 ## Step 6 — Allow Scheduling on Control Plane (optional)
-
-By default, the control plane node is tainted to prevent workload scheduling.
-For this project, we want it to also run workloads:
 
 ```bash
 kubectl taint nodes kube-1 node-role.kubernetes.io/control-plane:NoSchedule-
@@ -171,32 +229,21 @@ kubectl taint nodes kube-1 node-role.kubernetes.io/control-plane:NoSchedule-
 
 ---
 
-## Step 7 — Share kubeconfig with Your Teammate
+## Step 7 — Copy kubeconfig to Your Local Machine
 
 ```bash
-# On kube-1, print the kubeconfig
-cat $HOME/.kube/config
-```
-
-Copy the content and share it securely with Person B.
-On their local machine:
-
-```bash
+# On your local machine
 mkdir -p ~/.kube
-# Paste the content into:
-nano ~/.kube/config
+
+scp -i ~/.ssh/kubequest.pem ec2-user@$KUBE1_IP:/home/ec2-user/.kube/config ~/.kube/config
+
+# Replace private IP with public IP so you can reach it from outside
+sed -i "s|server: https://.*:6443|server: https://$KUBE1_IP:6443|" ~/.kube/config
 ```
 
-> Make sure to replace `server: https://127.0.0.1:6443` with `server: https://<kube-1-public-ip>:6443`
-
----
-
-## Verify Everything Works
-
+Verify from local:
 ```bash
-kubectl get nodes -o wide
-kubectl get pods --all-namespaces
-kubectl cluster-info
+kubectl get nodes
 ```
 
 ---
@@ -205,10 +252,14 @@ kubectl cluster-info
 
 | Issue | Fix |
 |-------|-----|
-| Node stays `NotReady` | CNI plugin not installed yet — check Step 3 |
-| `connection refused` on port 6443 | Security group missing port 6443 — check Phase 1 |
-| Join token expired | Regenerate with `kubeadm token create --print-join-command` |
+| `apt-get not found` | You are on Amazon Linux — use `yum` instead |
+| `No match for argument: apt-transport-https` | Not needed on Amazon Linux — skip it |
+| containerd not found | Run `sudo yum install -y containerd` |
+| Node stays `NotReady` | CNI not installed — run Step 3 |
+| `connection refused` on port 6443 | Check security group has port 6443 open |
+| Join token expired | Run `kubeadm token create --print-join-command` on kube-1 |
 | Pods stuck in `Pending` | Control plane taint active — run Step 6 |
+| kubectl from laptop fails | Check public IP in kubeconfig matches current kube-1 IP |
 
 ---
 
