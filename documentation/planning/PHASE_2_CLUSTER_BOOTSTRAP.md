@@ -229,6 +229,29 @@ kubectl taint nodes kube-1 node-role.kubernetes.io/control-plane:NoSchedule-
 
 ---
 
+## Step 6 bis — Label Both Nodes as Workers
+
+After removing the taint, kube-1 still shows no `worker` role in `kubectl get nodes`. This is purely cosmetic — add the label manually to both nodes:
+
+
+```bash
+# kube-2
+kubectl label node i-06cfda93115a3e14d.eu-west-3.compute.internal node-role.kubernetes.io/worker=worker
+
+# kube-1 (control plane + worker)
+kubectl label node i-0f5f389df39671199.eu-west-3.compute.internal \ node-role.kubernetes.io/worker=worker
+```
+
+Expected output after labeling:
+
+```
+NAME       STATUS   ROLES                  AGE   VERSION
+kube-1     Ready    control-plane,worker   35m   v1.29.x
+kube-2     Ready    worker                 10m   v1.29.x
+```
+
+---
+
 ## Step 7 — Copy kubeconfig to Your Local Machine
 
 ```bash
