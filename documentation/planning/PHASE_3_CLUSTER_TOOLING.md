@@ -5,104 +5,151 @@
 
 ## Overview
 
-Deploy all cluster management tools using Helm.
-All commands in this phase are run **on kube-1** unless stated otherwise.
+Deploy all cluster management components via a Kustomize-based GitOps repository.
+This repo is your single source of truth for all infrastructure tooling.
 
-### What gets deployed and where
+---
 
-| Tool | Namespace | Runs on node |
-|------|-----------|--------------|
-| nginx-ingress | `ingress-nginx` | `ingress` node (forced via NodeSelector) |
-| Kubernetes Dashboard | `kubernetes-dashboard` | any available node |
-| Prometheus + Grafana + Alertmanager | `monitoring` | `monitoring` node (forced via NodeSelector) |
-| Loki | `monitoring` | `monitoring` node (forced via NodeSelector) |
-| Promtail | `monitoring` | **all nodes** (DaemonSet — runs everywhere) |
+## Repository Structure
 
-> You do not SSH into the ingress or monitoring VMs for any of this.
-> Kubernetes schedules the pods onto those nodes automatically based on the labels you set in Phase 2.
+```
+infra-gitops/
+├── base/
+│   ├── nginx-ingress/
+│   │   └── kustomization.yaml
+│   ├── kubernetes-dashboard/
+│   │   ├── kustomization.yaml
+│   │   ├── recommended.yaml
+│   │   ├── admin-user.yaml
+│   │   └── ingress.yaml
+│   ├── kube-prometheus/
+│   │   └── kustomization.yaml
+│   └── loki/
+│       ├── kustomization.yaml
+│       └── promtail-daemonset.yaml
+└── overlays/
+    └── production/
+        └── kustomization.yaml
+```
 
 ---
 
 ## Prerequisites
 
-- Phase 2 complete — all 4 nodes `Ready` and labeled
-- SSH into **kube-1** for everything below
-
----
-
-## Step 0 — Install Helm
-
-> 🖥️ **Run on: kube-1**
+- Phase 2 complete — cluster running with both nodes Ready
+- `kubectl` configured and working
+- All 4 VMs joined to the cluster (`kube-1`, `kube-2`, `ingress`, `monitoring`)
+- Helm installed locally:
 
 ```bash
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-helm version
 ```
 
 ---
 
-## Step 1 — Deploy nginx-ingress
+## Component 1 — nginx-ingress
 
-> 🖥️ **Run on: kube-1**
+Deploy on the `ingress` node to handle all external traffic.
 
-nginx-ingress is the entry point for all HTTP/HTTPS traffic into the cluster.
-It will be scheduled on the `ingress` node automatically because of `nodeSelector.role=ingress`.
+> **Why HostNetwork instead of NodePort?**
+> Kubernetes restricts NodePort to the range 30000-32767, so you cannot bind directly
+> to ports 80/443 with NodePort. HostNetwork makes the nginx pod bind directly to the
+> node's network interfaces, so it listens on port 80/443 natively with no translation needed.
 
+### Label the ingress node
+```bash
+kubectl label node ingress role=ingress
+```
+
+### Add Helm repo
 ```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
+```
 
+### Install with HostNetwork + DaemonSet
+```bash
 helm install ingress-nginx ingress-nginx/ingress-nginx \
   --namespace ingress-nginx \
   --create-namespace \
   --set controller.nodeSelector.role=ingress \
-  --set controller.service.type=NodePort \
-  --set controller.service.nodePorts.http=80 \
-  --set controller.service.nodePorts.https=443
+  --set controller.hostNetwork=true \
+  --set controller.hostPort.enabled=true \
+  --set controller.service.type=ClusterIP \
+  --set controller.kind=DaemonSet
 ```
 
-Wait for it to be ready:
+> `hostNetwork=true` + `hostPort.enabled=true` binds the pod directly to the node's
+> ports 80 and 443. `kind=DaemonSet` ensures one pod per matching node.
+> `service.type=ClusterIP` is used because external traffic enters via the host port directly,
+> not through a Kubernetes Service.
 
-```bash
-kubectl get pods -n ingress-nginx -w
-# Wait until STATUS = Running, then Ctrl+C
+### Kustomize manifest
+```yaml
+# base/nginx-ingress/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+  - name: ingress-nginx
+    repo: https://kubernetes.github.io/ingress-nginx
+    version: "4.9.0"
+    releaseName: ingress-nginx
+    namespace: ingress-nginx
+    valuesInline:
+      controller:
+        nodeSelector:
+          role: ingress
+        hostNetwork: true
+        hostPort:
+          enabled: true
+        service:
+          type: ClusterIP
+        kind: DaemonSet
 ```
 
-Verify it landed on the ingress node:
-
+### Verify
 ```bash
-kubectl get pods -n ingress-nginx -o wide
-# NODE column should show your ingress VM
+kubectl get pods -n ingress-nginx
+kubectl get svc -n ingress-nginx
+```
+
+Expected: pod running on the `ingress` node, listening on ports 80 and 443.
+
+Traffic flow:
+```
+Internet → ingress VM public IP:80/443 → nginx pod (hostNetwork) → ClusterIP services
 ```
 
 ---
 
-## Step 2 — Deploy Kubernetes Dashboard
+## Component 2 — Kubernetes Dashboard
 
-> 🖥️ **Run on: kube-1**
+> **Note:** The Helm chart repository for Kubernetes Dashboard (`https://kubernetes.github.io/dashboard`)
+> is no longer reliably available. Install via the official manifest instead — it's simpler and more stable.
 
+### Install via kubectl
 ```bash
-helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard
-helm repo update
-
-helm install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard \
-  --namespace kubernetes-dashboard \
-  --create-namespace
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
 ```
 
-Wait for it to be ready:
+This creates the `kubernetes-dashboard` namespace and deploys all required resources automatically.
 
+### Verify
 ```bash
-kubectl get pods -n kubernetes-dashboard -w
-# Wait until STATUS = Running, then Ctrl+C
+kubectl get pods -n kubernetes-dashboard
 ```
 
-### Create admin user
+Expected output:
+```
+NAME                                         READY   STATUS    RESTARTS   AGE
+dashboard-metrics-scraper-xxx                1/1     Running   0          1m
+kubernetes-dashboard-xxx                     1/1     Running   0          1m
+```
 
-Create the file `admin-user.yaml`:
-
+### Create admin service account
 ```yaml
-# admin-user.yaml
+# base/kubernetes-dashboard/admin-user.yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -123,24 +170,16 @@ subjects:
     namespace: kubernetes-dashboard
 ```
 
-Apply it:
-
 ```bash
-kubectl apply -f admin-user.yaml
-```
+kubectl apply -f base/kubernetes-dashboard/admin-user.yaml
 
-Get your login token (save this for the demo):
-
-```bash
+# Get login token
 kubectl -n kubernetes-dashboard create token admin-user
 ```
 
-### Expose Dashboard via Ingress
-
-Create the file `dashboard-ingress.yaml`:
-
+### Expose via Ingress
 ```yaml
-# dashboard-ingress.yaml
+# base/kubernetes-dashboard/ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -148,7 +187,6 @@ metadata:
   namespace: kubernetes-dashboard
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
-    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
 spec:
   ingressClassName: nginx
   rules:
@@ -164,46 +202,39 @@ spec:
                   number: 443
 ```
 
-Apply it:
-
 ```bash
-kubectl apply -f dashboard-ingress.yaml
+kubectl apply -f base/kubernetes-dashboard/ingress.yaml
 ```
 
 ---
 
-## Step 3 — Deploy Prometheus + Grafana + Alertmanager
+## Component 3 — kube-prometheus (Prometheus + Grafana + Alertmanager)
 
-> 🖥️ **Run on: kube-1**
+Deploy on the `monitoring` node.
 
-These will be scheduled on the `monitoring` node automatically.
+### Label the monitoring node
+```bash
+kubectl label node monitoring role=monitoring
+```
 
+### Install kube-prometheus-stack
 ```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
 
+kubectl create namespace monitoring
+
 helm install kube-prometheus prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
-  --create-namespace \
   --set prometheus.prometheusSpec.nodeSelector.role=monitoring \
   --set grafana.nodeSelector.role=monitoring \
   --set alertmanager.alertmanagerSpec.nodeSelector.role=monitoring \
   --set grafana.adminPassword=admin123
 ```
 
-This takes 2-3 minutes. Wait for all pods to be ready:
-
-```bash
-kubectl get pods -n monitoring -w
-# Wait until all show Running, then Ctrl+C
-```
-
 ### Expose Grafana via Ingress
-
-Create the file `grafana-ingress.yaml`:
-
 ```yaml
-# grafana-ingress.yaml
+# base/kube-prometheus/grafana-ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -224,18 +255,9 @@ spec:
                   number: 80
 ```
 
-Apply it:
-
-```bash
-kubectl apply -f grafana-ingress.yaml
-```
-
 ### Expose Prometheus via Ingress
-
-Create the file `prometheus-ingress.yaml`:
-
 ```yaml
-# prometheus-ingress.yaml
+# base/kube-prometheus/prometheus-ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -256,20 +278,17 @@ spec:
                   number: 9090
 ```
 
-Apply it:
-
+### Verify
 ```bash
-kubectl apply -f prometheus-ingress.yaml
+kubectl get pods -n monitoring
+# Access Grafana at http://grafana.kubequest.local (admin / admin123)
 ```
 
 ---
 
-## Step 4 — Deploy Loki + Promtail
+## Component 4 — Loki + Promtail
 
-> 🖥️ **Run on: kube-1**
-
-Loki stores logs. Promtail runs on every node and ships logs to Loki.
-
+### Install Loki
 ```bash
 helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
@@ -281,22 +300,11 @@ helm install loki grafana/loki-stack \
   --set grafana.enabled=false
 ```
 
-Verify Promtail is running on every node:
+> `promtail.enabled=true` deploys Promtail as a DaemonSet automatically on all nodes.
 
-```bash
-kubectl get daemonset -n monitoring
-# DESIRED should equal your total node count (4)
-
-kubectl get pods -n monitoring -o wide
-# You should see one promtail pod per node
-```
-
-### Add Loki as a Grafana datasource
-
-Create the file `loki-datasource.yaml`:
-
+### Add Loki as Grafana datasource
 ```yaml
-# loki-datasource.yaml
+# base/loki/grafana-datasource.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -315,72 +323,73 @@ data:
         isDefault: false
 ```
 
-Apply it:
-
 ```bash
-kubectl apply -f loki-datasource.yaml
+kubectl apply -f base/loki/grafana-datasource.yaml
+```
+
+### Verify
+```bash
+kubectl get pods -n monitoring
+# Promtail should appear as a DaemonSet pod on every node
+kubectl get daemonset -n monitoring
 ```
 
 ---
 
-## Step 5 — Update Local DNS
+## Production Overlay
 
-> 🖥️ **Run on: your local machine** (not kube-1)
+Wire everything together with a single overlay:
 
-Add these lines to `/etc/hosts` so you can open the tools in your browser.
-Use the **public IP of your ingress VM**:
+```yaml
+# overlays/production/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
 
+resources:
+  - ../../base/nginx-ingress
+  - ../../base/kubernetes-dashboard
+  - ../../base/kube-prometheus
+  - ../../base/loki
+```
+
+### Deploy everything at once
 ```bash
-# macOS / Linux
-sudo nano /etc/hosts
-```
-
-Add:
-```
-<INGRESS_IP>  dashboard.kubequest.local
-<INGRESS_IP>  grafana.kubequest.local
-<INGRESS_IP>  prometheus.kubequest.local
-<INGRESS_IP>  app.kubequest.local
+kubectl apply -k overlays/production/
 ```
 
 ---
 
-## Step 6 — Verify Everything
-
-> 🖥️ **Run on: kube-1**
+## Verify All Components
 
 ```bash
-# All pods across all namespaces
+# All namespaces
 kubectl get pods --all-namespaces
 
-# All ingress rules
+# Ingress rules
 kubectl get ingress --all-namespaces
 
-# Check namespaces exist
-kubectl get namespaces
+# Services
+kubectl get svc --all-namespaces
 ```
 
-Expected namespaces:
+### Expected namespaces
 ```
-NAME                   STATUS
-default                Active
-ingress-nginx          Active
-kubernetes-dashboard   Active
-kube-system            Active
-monitoring             Active
+ingress-nginx          — nginx-ingress controller
+kubernetes-dashboard   — dashboard
+monitoring             — prometheus, grafana, alertmanager, loki, promtail
 ```
 
 ---
 
-## Step 7 — Open in Browser
+## Local DNS (for testing)
 
-> 🖥️ **Run on: your local machine**
+Add these entries to your `/etc/hosts` file on your local machine, pointing to the `ingress` node public IP:
 
-| URL | Login |
-|-----|-------|
-| http://grafana.kubequest.local | `admin` / `admin123` |
-| http://prometheus.kubequest.local | no login |
-| http://dashboard.kubequest.local | paste the token from Step 2 |
+```
+<ingress-public-ip>  dashboard.kubequest.local
+<ingress-public-ip>  grafana.kubequest.local
+<ingress-public-ip>  prometheus.kubequest.local
+```
 
 ---
 
@@ -388,15 +397,17 @@ monitoring             Active
 
 | Issue | Fix |
 |-------|-----|
-| Pod stuck on wrong node | Check node labels: `kubectl get nodes --show-labels` |
-| nginx-ingress pod not starting | Check it targets the ingress node: `kubectl get pods -n ingress-nginx -o wide` |
-| Grafana not loading in browser | Check ingress: `kubectl get ingress -n monitoring` |
-| Promtail not on all nodes | `kubectl get ds -n monitoring` — DESIRED should equal node count |
-| Dashboard blank page | Check annotation `backend-protocol: HTTPS` is present |
-| Can't reach URLs in browser | Check `/etc/hosts` has the ingress node public IP |
+| nginx pod not starting | Check node label: `kubectl get nodes --show-labels` |
+| Port 80/443 not reachable | Check security group on `ingress` VM allows ports 80 and 443 |
+| Ingress not routing | Check ingress class: `kubectl get ingressclass` |
+| Dashboard login fails | Regenerate token: `kubectl -n kubernetes-dashboard create token admin-user` |
+| Dashboard shows blank page | Check annotation `backend-protocol: HTTPS` is present on Ingress |
+| Grafana not loading | Check pod logs: `kubectl logs -n monitoring <grafana-pod>` |
+| Promtail not shipping logs | Check DaemonSet: `kubectl get ds -n monitoring` |
 
 ---
 
 ## Next Step
 
+Once all components are running and accessible, proceed to:
 **[Phase 4 — Application Helm Chart](./PHASE_4_HELM_CHART.md)**
