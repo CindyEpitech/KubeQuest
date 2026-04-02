@@ -1,11 +1,11 @@
 # KubeQuest — Private Registry sur kube-1
-> nerdctl + registry:2 | sans Kubernetes
+> registry:2 | nerdctl | buildkit
 
 ---
 
 ## Concept
 
-On fait tourner un registry de containers **directement sur la VM kube-1**, comme un service système classique.
+Un registry de containers qui tourne directement sur la VM kube-1, accessible par tous les nodes via le réseau privé AWS (10.0.9.227:5000).
 
 ```
 ┌─────────────────────────────────────────┐
@@ -28,71 +28,114 @@ On fait tourner un registry de containers **directement sur la VM kube-1**, comm
 └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
-Ce registry est accessible par tous les nodes via le réseau privé AWS — sans passer par internet.
+Un registry de containers qui tourne directement sur la VM kube-1, accessible par tous les nodes via le réseau privé AWS (`10.0.9.227:5000`).
 
-**nerdctl** = le CLI containerd. Remplace Docker sur Amazon Linux 2023. Mêmes commandes : `nerdctl build`, `nerdctl run`, `nerdctl push`.
+```
+┌──────────────────────────────┐
+│     WSL (local machine)      │
+│                              │
+│  sample-app-master/          │
+│  ├─ source code              │
+│  └─ Dockerfile               │
+└──────────────┬───────────────┘
+               │
+               │ scp
+               ▼
+┌──────────────────────────────┐
+│   kube-1 (10.0.9.227)        │
+│                              │
+│  ┌────────────────────────┐  │
+│  │ registry:2             │  │
+│  │ (nerdctl, port 5000)   │  │
+│  └────────────────────────┘  │
+│                              │
+│  nerdctl build + push        │
+└──────────────┬───────────────┘
+               │
+               │ pull (AWS private network)
+               ▼
+┌──────────────────────────────┐
+│  kube-2                      │
+│  ├─ ingress                  │
+│  └─ monitoring               │
+└──────────────────────────────┘
+```
 
 ---
 
-## Étape 0 — Installer Nerdctl
+## Étape 1 — Installer nerdctl sur kube-1
 
 ```bash
+# SSH sur kube-1
+ssh -i /home/cindy/projects/KubeQuest/kubequest-key-pair.pem ec2-user@35.181.55.161
+
 # Télécharge nerdctl
 curl -LO https://github.com/containerd/nerdctl/releases/download/v2.0.2/nerdctl-2.0.2-linux-amd64.tar.gz
 
-# Extrait et installe
+# Installe dans /usr/local/bin
 sudo tar -C /usr/local/bin -xzf nerdctl-2.0.2-linux-amd64.tar.gz nerdctl
 
 # Vérifie
 nerdctl --version
 ```
 
-## Étape 1 — Lancer le registry sur kube-1
+---
 
-SSH sur kube-1 :
+## Étape 2 — Installer buildkit sur kube-1
+
+nerdctl a besoin de buildkit pour builder des images.
+
 ```bash
-ssh -i ~/.ssh/kubequest ec2-user@35.181.55.161
+# Télécharge buildkit
+curl -LO https://github.com/moby/buildkit/releases/download/v0.13.2/buildkit-v0.13.2.linux-amd64.tar.gz
+
+# Installe dans /usr/local
+sudo tar -C /usr/local -xzf buildkit-v0.13.2.linux-amd64.tar.gz
+
+# Démarre buildkitd en arrière-plan
+sudo buildkitd &
+
+# Attends 2 secondes et vérifie
+sleep 2
+sudo buildctl debug workers
+# Doit afficher 2 workers avec leurs plateformes
 ```
 
-Lancer le registry :
+> buildkitd doit être relancé à chaque reboot de kube-1 avec `sudo buildkitd &`
+
+---
+
+## Étape 3 — Lancer le registry sur kube-1
+
 ```bash
-# Lance registry:2 comme un container nerdctl en arrière-plan
-# -d           : arrière-plan (detached)
-# --name       : nom du container
-# --restart always : redémarre automatiquement si la VM reboot
-# -p 5000:5000 : expose le port 5000 de la VM vers le port 5000 du container
-# -v           : stocke les images sur le disque de la VM (dans /var/lib/registry)
+# Lance registry:2 comme container nerdctl en arrière-plan
+# --restart always : redémarre si la VM reboot
+# -p 5000:5000    : expose le port 5000 de la VM
+# -v              : stocke les images sur le disque de la VM
 sudo nerdctl run -d \
   --name registry \
   --restart always \
   -p 5000:5000 \
   -v /var/lib/registry:/var/lib/registry \
   registry:2
-```
 
-Vérifier que ça tourne :
-```bash
-# Liste les containers nerdctl actifs
-sudo nerdctl ps
-
-# Teste le registry — doit retourner {}
+# Vérifie que le registry répond
 curl http://localhost:5000/v2/
+# Doit retourner {}
 ```
 
 ---
 
-## Étape 2 — Configurer containerd sur les 4 nodes
+## Étape 4 — Configurer containerd sur les 4 nodes
 
-containerd (le moteur de containers de Kubernetes) doit savoir que ce registry existe et qu'il peut lui faire confiance sans TLS.
-
-À faire sur **kube-1, kube-2, ingress et monitoring** :
+À faire sur **kube-1, kube-2, ingress et monitoring**.
 
 ```bash
-# Crée le dossier de config pour ce registry spécifique
+# Crée le dossier de config pour ce registry
 sudo mkdir -p /etc/containerd/certs.d/10.0.9.227:5000
 
-# Crée le fichier de config
-# skip_verify = true : accepte le registry sans TLS (HTTP simple)
+# Crée le fichier hosts.toml
+# skip_verify = true : accepte HTTP sans TLS
 sudo tee /etc/containerd/certs.d/10.0.9.227:5000/hosts.toml <<EOF
 server = "http://10.0.9.227:5000"
 
@@ -105,95 +148,58 @@ EOF
 sudo systemctl restart containerd
 ```
 
-> L'adresse `10.0.9.227` est l'IP privée de kube-1 — les autres nodes l'atteignent via le réseau interne AWS.
+---
+
+## Étape 5 — Copier le code source depuis WSL vers kube-1
+
+Depuis **WSL** (machine locale) :
+
+```bash
+scp -i /home/cindy/projects/KubeQuest/kubequest-key-pair.pem \
+  -r /home/cindy/projects/KubeQuest/sample-app-master \
+  ec2-user@35.181.55.161:~/
+```
 
 ---
 
-## Étape 3 — Builder et pusher l'image depuis kube-1
+## Étape 6 — Builder et pusher l'image
 
-Le code source de l'app doit être présent sur kube-1. Soit tu clones ton repo, soit tu copias les fichiers avec `scp`.
-
-Option Clone:
+Sur **kube-1** :
 
 ```bash
-# Clone le repo sur kube-1 (une seule fois)
-git clone https://github.com/ton-org/ton-repo.git
-cd ton-repo
+cd ~/sample-app-master
 
-# Tag = hash court du commit Git (ex: a3f9c12)
-# Unique par commit, traçable, même convention que le CI
-export IMAGE_TAG=$(git rev-parse --short HEAD)
+# Définir le tag de l'image
+export IMAGE_TAG=v0.1.0
 
-# Build l'image depuis le Dockerfile
-# -t = tag complet : adresse-registry/nom-image:tag
+# Builder l'image depuis le Dockerfile
 sudo nerdctl build -t 10.0.9.227:5000/myapp:$IMAGE_TAG .
 
-# Push vers le registry
-# --insecure-registry : autorise le HTTP (pas de TLS)
+# Pusher vers le registry
 sudo nerdctl push --insecure-registry 10.0.9.227:5000/myapp:$IMAGE_TAG
 
-# Vérifie que l'image est bien stockée dans le registry
+# Vérifier que l'image est bien stockée
 curl http://10.0.9.227:5000/v2/myapp/tags/list
-# doit retourner {"name":"myapp","tags":["a3f9c12"]}
+# Doit retourner {"name":"myapp","tags":["v0.1.0"]}
 ```
-
-Option la plus simple : copier les fichiers de WSL vers kube-1, puis builder là-bas:
-
-```bash
-# Depuis WSL — copie tout le projet vers kube-1
-scp -i ~/.ssh/kubequest -r /home/cindy/projects/KubeQuest/infra-gitops ec2-user@35.181.55.161:~/
-
-# SSH sur kube-1
-ssh -i ~/.ssh/kubequest ec2-user@35.181.55.161
-
-# Sur kube-1 — installe nerdctl si pas encore fait
-curl -LO https://github.com/containerd/nerdctl/releases/download/v2.0.2/nerdctl-2.0.2-linux-amd64.tar.gz
-sudo tar -C /usr/local/bin -xzf nerdctl-2.0.2-linux-amd64.tar.gz nerdctl
-
-# Va dans le dossier copié (là où est le Dockerfile)
-cd ~/infra-gitops
-
-# Build et push
-export IMAGE_TAG=$(git rev-parse --short HEAD)
-sudo nerdctl build -t 10.0.9.227:5000/myapp:$IMAGE_TAG .
-sudo nerdctl push --insecure-registry 10.0.9.227:5000/myapp:$IMAGE_TAG
-```
-
-À chaque modification du code, tu refais scp puis rebuild sur kube-1. C'est un peu manuel — la phase 5 (CI/CD) automatisera ça.
-
----
-
-## Étape 4 — Déployer avec Helm
-
-```bash
-# Depuis ta machine locale (kubectl configuré)
-export IMAGE_TAG=a3f9c12  # le tag que tu as pushé
-
-helm install myapp ./charts/myapp \
-  --namespace myapp \
-  --set image.repository=10.0.9.227:5000/myapp \
-  --set image.tag=$IMAGE_TAG \
-  --set secret.appKey="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
-  --set secret.dbPassword=app_password \
-  --set secret.dbRootPassword=app_root_password \
-  --wait --timeout 5m
-```
-
-Kubernetes va puller `10.0.9.227:5000/myapp:a3f9c12` depuis chaque node — containerd sait où aller grâce à la config faite à l'étape 2.
 
 ---
 
 ## Workflow pour les mises à jour
 
 ```bash
-# Sur kube-1 — après chaque modification du code
-cd ton-repo
-git pull
-export IMAGE_TAG=$(git rev-parse --short HEAD)
+# 1. Depuis WSL — copier les nouveaux fichiers
+scp -i /home/cindy/projects/KubeQuest/kubequest-key-pair.pem \
+  -r /home/cindy/projects/KubeQuest/sample-app-master \
+  ec2-user@35.181.55.161:~/
+
+# 2. Sur kube-1 — rebuilder et pusher
+cd ~/sample-app-master
+export IMAGE_TAG=v0.1.1   # incrémenter le tag
 sudo nerdctl build -t 10.0.9.227:5000/myapp:$IMAGE_TAG .
 sudo nerdctl push --insecure-registry 10.0.9.227:5000/myapp:$IMAGE_TAG
 
-# Depuis ta machine locale — upgrade le déploiement
+# 3. Depuis WSL — mettre à jour le déploiement Helm
 helm upgrade myapp ./charts/myapp \
   --namespace myapp \
   --set image.tag=$IMAGE_TAG \
@@ -202,12 +208,27 @@ helm upgrade myapp ./charts/myapp \
 
 ---
 
+## Après un reboot de kube-1
+
+buildkitd ne persiste pas — il faut le relancer :
+
+```bash
+sudo buildkitd &
+sleep 2
+sudo buildctl debug workers
+```
+
+Le registry lui redémarre automatiquement grâce à `--restart always`.
+
+---
+
 ## Troubleshooting
 
-| Problème | Cause | Fix |
-|----------|-------|-----|
-| `curl localhost:5000/v2/` ne répond pas | Registry pas démarré | `sudo nerdctl ps` — relancer si absent |
-| Pull échoue sur les workers | containerd pas reconfiguré | Vérifier `/etc/containerd/certs.d/10.0.9.227:5000/hosts.toml` sur le node |
-| `connection refused` depuis un autre node | Port 5000 bloqué | Vérifier le Security Group AWS — port 5000 ouvert en interne (`10.0.0.0/16`) |
-| Image non trouvée après push | Mauvais tag | `curl http://10.0.9.227:5000/v2/myapp/tags/list` pour voir les tags disponibles |
-| Registry perdu après reboot | `--restart always` manquant | Relancer avec le flag `--restart always` |
+| Problème | Fix |
+|----------|-----|
+| `nerdctl: command not found` | Refaire l'étape 1 |
+| `buildkitd` not found au build | Relancer `sudo buildkitd &` |
+| `curl localhost:5000/v2/` ne répond pas | `sudo nerdctl ps` — relancer le registry si absent |
+| Pull échoue sur un worker | Vérifier `/etc/containerd/certs.d/10.0.9.227:5000/hosts.toml` sur ce node |
+| `lstat Containerfile: no such file` | Tu n'es pas dans le bon dossier — `cd ~/sample-app-master` |
+| Image non trouvée après push | `curl http://10.0.9.227:5000/v2/myapp/tags/list` pour vérifier |

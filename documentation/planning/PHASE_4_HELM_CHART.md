@@ -11,6 +11,8 @@ This chart replaces:
 - `db` container → Bitnami MySQL subchart (PVC, existingSecret)
 - `traefik` → already covered by nginx-ingress from Phase 3
 
+Image registry : **registry:2 running directly on kube-1** (port 5000), built and pushed with nerdctl.
+
 ---
 
 ## Chart Structure
@@ -45,6 +47,7 @@ charts/
 | Health probe path | `/up` | Laravel 10+ standard health endpoint |
 | Replicas | 2 min, 6 max (HPA) | Redundancy + auto-scaling |
 | Rolling update | `maxUnavailable: 0` + `minReadySeconds: 10` | Zero-downtime deploys |
+| Registry | registry:2 on kube-1 via nerdctl | Private, no external dependency, accessible via AWS private network |
 
 ---
 
@@ -67,36 +70,27 @@ helm dependency update
 
 ## Step 2 — Build & push image
 
-```bash
-# Use the short Git commit hash as the image tag (e.g. a3f9c12)
-# Unique per commit, fully traceable — same convention as the CI pipeline
-export IMAGE_TAG=$(git rev-parse --short HEAD)
-
-# Build the Docker image from the Dockerfile in the current directory
-# and tag it with the full GitLab registry path + commit tag
-docker build -t registry.gitlab.com/your-group/myapp:$IMAGE_TAG .
-
-# Push the image to the GitLab registry so the cluster can pull it
-docker push registry.gitlab.com/your-group/myapp:$IMAGE_TAG
-```
+> See **[PHASE_4_REGISTRY.md](./PHASE_4_REGISTRY.md)**.
 
 ---
 
 ## Step 3 — Create namespace & secrets
+
+Run from your **local machine** (kubectl configured) :
 
 ```bash
 # Create an isolated namespace for the app
 # All app resources live here, separate from monitoring, ingress-nginx, etc.
 kubectl create namespace myapp
 
-# Create the Laravel app Secret
+# Create the Laravel APP_KEY secret
 # --from-literal creates a key=value entry directly from the CLI
 # Kubernetes stores it base64-encoded internally
 kubectl create secret generic myapp-secret \
   --from-literal=app-key="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
   -n myapp
 
-# Create the DB credentials Secret
+# Create the DB credentials secret
 # Key names mysql-password and mysql-root-password are REQUIRED by Bitnami MySQL —
 # the subchart looks for exactly these keys when existingSecret is set
 kubectl create secret generic myapp-db-secret \
@@ -119,10 +113,9 @@ helm install myapp ./charts/myapp \
   # Deploy everything into the myapp namespace
   --namespace myapp \
   \
-  # Override values.yaml from the CLI — --set takes priority
-  # Tells Helm which image to pull for the app container
-  --set image.repository=registry.gitlab.com/your-group/myapp \
-  --set image.tag=$IMAGE_TAG \
+  # Point to the private registry on kube-1 (private IP, accessible by all nodes)
+  --set image.repository=10.0.9.227:5000/myapp \
+  --set image.tag=v0.1.0 \
   \
   # Inject sensitive values at deploy time — these flow into secret.yaml templates
   --set secret.appKey="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
@@ -158,7 +151,7 @@ kubectl get hpa -n myapp
 kubectl logs -n myapp deployment/myapp-myapp
 ```
 
-Add to `/etc/hosts` on your machine:
+Add to `/etc/hosts` on your local machine:
 ```
 <ingress-public-ip>  app.kubequest.local
 ```
@@ -170,15 +163,13 @@ curl http://app.kubequest.local
 
 ---
 
-## Upgrade (e.g. new image from CI)
+## Upgrade (e.g. after a code change)
 
 ```bash
-# helm upgrade updates an existing release
-# Helm diffs old and new manifests and only applies what changed
-# Changing the image tag triggers a rolling update of the Deployment
+# See REGISTRY.md for rebuild + push steps, then:
 helm upgrade myapp ./charts/myapp \
   --namespace myapp \
-  --set image.tag=$NEW_TAG \
+  --set image.tag=v0.1.1 \
   --wait --timeout 5m
 ```
 
@@ -236,7 +227,7 @@ kubectl rollout undo deployment/myapp-myapp -n myapp
 | HPA not scaling | `kubectl top pods -n myapp` — metrics-server must be running |
 | PVC Pending | No default StorageClass — `kubectl get storageclass` |
 | DB auth error | Secret keys must be exactly `mysql-password` / `mysql-root-password` |
-| Image pull error | Check registry credentials and image path |
+| Image pull error | Check containerd config on the node — see `REGISTRY.md` |
 
 ---
 
