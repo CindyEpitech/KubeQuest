@@ -61,14 +61,15 @@ infra-gitops/
 │   │   └── kustomization.yaml
 │   ├── kubernetes-dashboard/
 │   │   ├── kustomization.yaml
-│   │   ├── recommended.yaml
 │   │   ├── admin-user.yaml
 │   │   └── ingress.yaml
 │   ├── kube-prometheus/
-│   │   └── kustomization.yaml
+│   │   ├── kustomization.yaml
+│   │   ├── grafana-ingress.yaml
+│   │   └── prometheus-ingress.yaml
 │   └── loki/
 │       ├── kustomization.yaml
-│       └── promtail-daemonset.yaml
+│       └── grafana-datasource.yaml
 └── overlays/
     └── production/
         └── kustomization.yaml
@@ -158,23 +159,11 @@ helm install ingress-nginx ingress-nginx/ingress-nginx \
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-helmCharts:
-  - name: ingress-nginx
-    repo: https://kubernetes.github.io/ingress-nginx
-    version: "4.9.0"
-    releaseName: ingress-nginx
-    namespace: ingress-nginx
-    valuesInline:
-      controller:
-        nodeSelector:
-          role: ingress
-        hostNetwork: true
-        hostPort:
-          enabled: true
-        service:
-          type: ClusterIP
-        kind: DaemonSet
+resources: []
 ```
+
+> nginx-ingress is deployed via Helm directly. The kustomization.yaml is kept empty
+> so the overlay can reference it without error. Helm manages the lifecycle separately.
 
 ### Verify
 
@@ -281,6 +270,18 @@ spec:
 
 ```bash
 kubectl apply -f base/kubernetes-dashboard/ingress.yaml
+```
+
+### Kustomize manifest
+
+```yaml
+# base/kubernetes-dashboard/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - admin-user.yaml
+  - ingress.yaml
 ```
 
 ### Verify
@@ -390,6 +391,18 @@ spec:
 kubectl apply -f base/kube-prometheus/prometheus-ingress.yaml
 ```
 
+### Kustomize manifest
+
+```yaml
+# base/kube-prometheus/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - grafana-ingress.yaml
+  - prometheus-ingress.yaml
+```
+
 ### Verify
 
 ```bash
@@ -443,6 +456,17 @@ data:
 
 ```bash
 kubectl apply -f base/loki/grafana-datasource.yaml
+```
+
+### Kustomize manifest
+
+```yaml
+# base/loki/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - grafana-datasource.yaml
 ```
 
 ### Verify
@@ -534,6 +558,7 @@ curl http://prometheus.kubequest.local
 | Dashboard login fails | Regenerate token: `kubectl -n kubernetes-dashboard create token admin-user` |
 | Grafana not loading | Check logs: `kubectl logs -n monitoring <grafana-pod>` |
 | Promtail not shipping logs | Check DaemonSet: `kubectl get ds -n monitoring` |
+| `kubectl apply -k` helm error | nginx-ingress kustomization.yaml must have `resources: []`, not `helmCharts:` |
 
 ### Useful debug commands
 
