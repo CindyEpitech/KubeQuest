@@ -68,8 +68,7 @@ infra-gitops/
 │   │   ├── grafana-ingress.yaml
 │   │   └── prometheus-ingress.yaml
 │   └── loki/
-│       ├── kustomization.yaml
-│       └── grafana-datasource.yaml
+│       └── kustomization.yaml
 └── overlays/
     └── production/
         └── kustomization.yaml
@@ -434,28 +433,36 @@ helm install loki grafana/loki-stack \
 
 ### Add Loki as Grafana datasource
 
-```yaml
-# base/loki/grafana-datasource.yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: loki-datasource
-  namespace: monitoring
-  labels:
-    grafana_datasource: "1"
-data:
-  loki-datasource.yaml: |-
-    apiVersion: 1
-    datasources:
-      - name: Loki
-        type: loki
-        url: http://loki:3100
-        access: proxy
-        isDefault: false
-```
+> **⚠️ Do NOT apply a custom grafana-datasource.yaml ConfigMap.**
+> `loki-stack` already creates a ConfigMap `loki-loki-stack` with `grafana_datasource: "1"`.
+> Adding a second ConfigMap with `isDefault: true` causes Grafana to crash with:
+> `datasource.yaml config is invalid. Only one datasource per organization can be marked as default`
+
+Instead, after installing Loki, verify the datasource ConfigMap it created:
 
 ```bash
-kubectl apply -f base/loki/grafana-datasource.yaml
+kubectl get configmap -n monitoring -l grafana_datasource=1
+# Should show: kube-prometheus-kube-prome-grafana-datasource AND loki-loki-stack
+```
+
+Check that `loki-loki-stack` does not have `isDefault: true`:
+
+```bash
+kubectl get configmap loki-loki-stack -n monitoring -o yaml | grep isDefault
+```
+
+If it does, fix it:
+
+```bash
+kubectl edit configmap loki-loki-stack -n monitoring
+# Set isDefault: false, then save
+```
+
+Then restart Grafana to pick up the datasource:
+
+```bash
+kubectl rollout restart deployment/kube-prometheus-grafana -n monitoring
+kubectl rollout status deployment/kube-prometheus-grafana -n monitoring
 ```
 
 ### Kustomize manifest
@@ -465,9 +472,10 @@ kubectl apply -f base/loki/grafana-datasource.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-resources:
-  - grafana-datasource.yaml
+resources: []
 ```
+
+> loki-stack manages its own Grafana datasource ConfigMap. Nothing extra to apply here.
 
 ### Verify
 
@@ -477,6 +485,9 @@ kubectl get daemonset -n monitoring
 ```
 
 Promtail should appear as a DaemonSet pod on every node.
+
+Once Grafana is running, add Loki manually via the UI if needed:
+**Connections → Data Sources → Add → Loki → URL: `http://loki:3100`**
 
 ---
 
@@ -557,6 +568,7 @@ curl http://prometheus.kubequest.local
 | Ingress not routing | Check ingress class: `kubectl get ingressclass` |
 | Dashboard login fails | Regenerate token: `kubectl -n kubernetes-dashboard create token admin-user` |
 | Grafana not loading | Check logs: `kubectl logs -n monitoring <grafana-pod>` |
+| Grafana CrashLoopBackOff — duplicate default datasource | `loki-loki-stack` ConfigMap has `isDefault: true` — edit it to `false` and restart Grafana |
 | Promtail not shipping logs | Check DaemonSet: `kubectl get ds -n monitoring` |
 | `kubectl apply -k` helm error | nginx-ingress kustomization.yaml must have `resources: []`, not `helmCharts:` |
 
