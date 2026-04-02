@@ -81,11 +81,16 @@ Run from your **local machine** (kubectl configured) :
 ```bash
 # Create an isolated namespace for the app
 # All app resources live here, separate from monitoring, ingress-nginx, etc.
+# Crée un espace isolé dans le cluster uniquement pour ton app. Sans ça, tous tes objets Kubernetes (pods, services, secrets...) iraient dans le namespace `default` mélangés avec le reste. Là tout ce qui concerne l'app vivra dans `myapp`, séparé de `monitoring`, `ingress-nginx`, etc.
 kubectl create namespace myapp
+
 
 # Create the Laravel APP_KEY secret
 # --from-literal creates a key=value entry directly from the CLI
 # Kubernetes stores it base64-encoded internally
+# Crée un objet Kubernetes de type **Secret** nommé `myapp-secret`. Un Secret c'est comme un ConfigMap mais Kubernetes le traite différemment — il ne l'affiche pas en clair dans les logs, et il est encodé en base64 en interne.
+# `--from-literal=app-key="..."` crée une entrée dans ce Secret : la clé s'appelle `app-key`, la valeur c'est la Laravel APP_KEY. C'est cette valeur que le template `secret.yaml` du chart va lire et injecter dans le pod comme variable d'environnement `APP_KEY`.
+# `-n myapp` : crée ce Secret dans le namespace `myapp`.
 kubectl create secret generic myapp-secret \
   --from-literal=app-key="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
   -n myapp
@@ -93,6 +98,7 @@ kubectl create secret generic myapp-secret \
 # Create the DB credentials secret
 # Key names mysql-password and mysql-root-password are REQUIRED by Bitnami MySQL —
 # the subchart looks for exactly these keys when existingSecret is set
+# Même principe mais avec deux entrées dans le même Secret. Les noms `mysql-password` et `mysql-root-password` ne sont **pas libres** — le chart Bitnami MySQL cherche exactement ces noms de clés quand tu lui indiques `existingSecret: myapp-db-secret` dans `values.yaml`. Si tu les appelles autrement, MySQL ne trouvera pas son mot de passe et ne démarrera pas.
 kubectl create secret generic myapp-db-secret \
   --from-literal=mysql-password=app_password \
   --from-literal=mysql-root-password=app_root_password \
@@ -101,33 +107,36 @@ kubectl create secret generic myapp-db-secret \
 
 > Never put real values in `values.yaml`. Always inject at deploy time via `--set` or pre-created Secrets.
 
+### Pourquoi créer les Secrets avant le `helm install` ?
+
+Parce que le chart référence ces Secrets mais ne les crée pas lui-même depuis des valeurs fixes — il attend qu'ils existent déjà. Si tu fais `helm install` sans avoir créé les Secrets, les pods crashent immédiatement car les variables d'environnement `APP_KEY` et `DB_PASSWORD` sont introuvables.
+
 ---
 
 ## Step 4 — Install
 
+Run from `/home/cindy/projects/KubeQuest/infra-gitops` :
+
 ```bash
-# myapp = release name, prefixes all created resources (e.g. myapp-mysql, myapp-myapp)
-# ./charts/myapp = path to the chart
+# If a previous failed install exists, clean it up first
+helm uninstall myapp -n myapp
+
 helm install myapp ./charts/myapp \
-  \
-  # Deploy everything into the myapp namespace
   --namespace myapp \
-  \
-  # Point to the private registry on kube-1 (private IP, accessible by all nodes)
   --set image.repository=10.0.9.227:5000/myapp \
   --set image.tag=v0.1.0 \
-  \
-  # Inject sensitive values at deploy time — these flow into secret.yaml templates
   --set secret.appKey="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
   --set secret.dbPassword=app_password \
-  --set secret.dbRootPassword=app_root_password \
-  \
-  # Block until all pods are Ready before returning
-  # Without this, the command exits immediately even if pods are still starting
-  --wait \
-  \
-  # If pods are not Ready after 5 minutes, fail the command
-  --timeout 5m
+  --set secret.dbRootPassword=app_root_password
+```
+
+> Do not use `--wait` during initial setup — if something is wrong it will hang. Check pod status manually with `kubectl get pods -n myapp`. Add `--wait --timeout 5m` only once the chart is confirmed working.
+
+Verify the release is deployed:
+
+```bash
+helm list -n myapp
+# STATUS should be: deployed
 ```
 
 ---
