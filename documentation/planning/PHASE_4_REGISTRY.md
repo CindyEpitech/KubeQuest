@@ -113,6 +113,8 @@ sudo systemctl restart containerd
 
 Le code source de l'app doit être présent sur kube-1. Soit tu clones ton repo, soit tu copias les fichiers avec `scp`.
 
+Option Clone:
+
 ```bash
 # Clone le repo sur kube-1 (une seule fois)
 git clone https://github.com/ton-org/ton-repo.git
@@ -134,6 +136,30 @@ sudo nerdctl push --insecure-registry 10.0.9.227:5000/myapp:$IMAGE_TAG
 curl http://10.0.9.227:5000/v2/myapp/tags/list
 # doit retourner {"name":"myapp","tags":["a3f9c12"]}
 ```
+
+Option la plus simple : copier les fichiers de WSL vers kube-1, puis builder là-bas:
+
+```bash
+# Depuis WSL — copie tout le projet vers kube-1
+scp -i ~/.ssh/kubequest -r /home/cindy/projects/KubeQuest/infra-gitops ec2-user@35.181.55.161:~/
+
+# SSH sur kube-1
+ssh -i ~/.ssh/kubequest ec2-user@35.181.55.161
+
+# Sur kube-1 — installe nerdctl si pas encore fait
+curl -LO https://github.com/containerd/nerdctl/releases/download/v2.0.2/nerdctl-2.0.2-linux-amd64.tar.gz
+sudo tar -C /usr/local/bin -xzf nerdctl-2.0.2-linux-amd64.tar.gz nerdctl
+
+# Va dans le dossier copié (là où est le Dockerfile)
+cd ~/infra-gitops
+
+# Build et push
+export IMAGE_TAG=$(git rev-parse --short HEAD)
+sudo nerdctl build -t 10.0.9.227:5000/myapp:$IMAGE_TAG .
+sudo nerdctl push --insecure-registry 10.0.9.227:5000/myapp:$IMAGE_TAG
+```
+
+À chaque modification du code, tu refais scp puis rebuild sur kube-1. C'est un peu manuel — la phase 5 (CI/CD) automatisera ça.
 
 ---
 
