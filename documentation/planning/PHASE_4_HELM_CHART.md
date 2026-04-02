@@ -1,5 +1,5 @@
 # KubeQuest — Phase 4: Application Helm Chart
-> Laravel PHP 8.2 / Apache / Bitnami MySQL 8.0
+> Laravel PHP 8.2 / Apache / MySQL 8.0 officiel
 
 ---
 
@@ -8,10 +8,26 @@
 The docker-compose app is a **Laravel** application backed by **MySQL 8.0**.
 This chart replaces:
 - `app` container → Kubernetes Deployment (2 replicas, anti-affinity)
-- `db` container → Bitnami MySQL subchart (PVC, existingSecret)
+- `db` container → MySQL officiel (image `mysql:8.0` depuis le registry privé)
 - `traefik` → already covered by nginx-ingress from Phase 3
 
 Image registry : **registry:2 running directly on kube-1** (port 5000), built and pushed with nerdctl.
+See `REGISTRY.md` for the full registry setup.
+
+---
+
+## Real-world fixes applied
+
+| Problème | Fix |
+|----------|-----|
+| Bitnami MySQL introuvable sur Docker Hub | Utilisation de l'image officielle `mysql:8.0` + manifest custom (`mysql.yaml`) |
+| Bitnami MySQL incompatible avec l'image officielle | Désactivé via `mysql.enabled=false` + `mysql.yaml` custom |
+| Pas de StorageClass par défaut | Installation de `local-path-provisioner` (Rancher) |
+| DNS cassé dans le cluster | CoreDNS redirigé vers `8.8.8.8` au lieu de `10.0.0.2` (DNS AWS bloqué par Calico) |
+| containerd ne résout pas le registry privé | `ctr -n k8s.io images pull --plain-http` sur chaque node pour pre-pull |
+| Readiness probe `/up` retourne 404 | Changé en `/` dans `deployment.yaml` |
+| Laravel retourne 500 | Migrations non exécutées — lancer `artisan migrate --force` manuellement |
+| Service `myapp-mysql` manquant | Créé manuellement via `kubectl apply` |
 
 ---
 
@@ -31,95 +47,88 @@ charts/
         ├── ingress.yaml          # Expose via nginx-ingress
         ├── hpa.yaml              # Auto-scaling 2→6 replicas on CPU
         ├── pvc.yaml              # Backup storage volume
-        └── cronjob-backup.yaml   # Daily mysqldump, keeps 7 backups
+        ├── cronjob-backup.yaml   # Daily mysqldump, keeps 7 backups
+        └── mysql.yaml            # MySQL officiel (Deployment + Service + PVC)
 ```
 
 ---
 
-## Key design decisions
+## Prerequisites
 
-| Topic | Choice | Reason |
-|-------|--------|--------|
-| Database | Bitnami MySQL (not PostgreSQL) | docker-compose uses MySQL 8.0 |
-| DB credentials | `existingSecret: myapp-db-secret` | Bitnami reads `mysql-password` and `mysql-root-password` keys |
-| APP_KEY | Secret `myapp-secret` / key `app-key` | Laravel requires this — sensitive |
-| initContainer | `busybox` TCP probe on MySQL port | Prevents Laravel crashing before DB is ready |
-| Health probe path | `/up` | Laravel 10+ standard health endpoint |
-| Replicas | 2 min, 6 max (HPA) | Redundancy + auto-scaling |
-| Rolling update | `maxUnavailable: 0` + `minReadySeconds: 10` | Zero-downtime deploys |
-| Registry | registry:2 on kube-1 via nerdctl | Private, no external dependency, accessible via AWS private network |
+### 1. StorageClass (local-path-provisioner)
 
----
-
-## Step 1 — Add Bitnami repo & pull dependencies
+Sans StorageClass, les PVC restent en `Pending` et MySQL ne démarre pas.
 
 ```bash
-# Register the Bitnami Helm repository locally (like apt-add-repository)
-helm repo add bitnami https://charts.bitnami.com/bitnami
+# Installe local-path-provisioner
+kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
 
-# Refresh the repo index to get the latest available versions (like apt-get update)
-helm repo update
+# Vérifie
+kubectl get storageclass
 
-# Read Chart.yaml, download the MySQL subchart from Bitnami,
-# and place it in charts/myapp/charts/ so Helm bundles it at deploy time
-cd charts/myapp
-helm dependency update
+# Marque comme défaut
+kubectl patch storageclass local-path \
+  -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+```
+
+### 2. Fix CoreDNS (DNS cassé avec Calico sur AWS)
+
+Sans ce fix, les pods ne peuvent pas résoudre les noms DNS internes.
+
+```bash
+kubectl -n kube-system edit configmap coredns
+```
+
+Remplace :
+```
+forward . /etc/resolv.conf {
+```
+par :
+```
+forward . 8.8.8.8 8.8.4.4 {
+```
+
+Puis redémarre CoreDNS :
+```bash
+kubectl rollout restart deployment/coredns -n kube-system
+```
+
+### 3. Registry privé sur tous les nodes
+
+Voir `REGISTRY.md`. Sur chaque node, pre-pull les images dans le namespace `k8s.io` :
+
+```bash
+sudo ctr -n k8s.io images pull --plain-http 10.0.9.227:5000/myapp:v0.1.0
+sudo ctr -n k8s.io images pull --plain-http 10.0.9.227:5000/mysql:8.0
 ```
 
 ---
 
-## Step 2 — Build & push image
+## Step 1 — Build & push image
 
-> See **[PHASE_4_REGISTRY.md](./PHASE_4_REGISTRY.md)**.
+See **[REGISTRY.md](./REGISTRY.md)**.
 
 ---
 
-## Step 3 — Create namespace & secrets
-
-Run from your **local machine** (kubectl configured) :
+## Step 2 — Create namespace
 
 ```bash
-# Create an isolated namespace for the app
-# All app resources live here, separate from monitoring, ingress-nginx, etc.
-# Crée un espace isolé dans le cluster uniquement pour ton app. Sans ça, tous tes objets Kubernetes (pods, services, secrets...) iraient dans le namespace `default` mélangés avec le reste. Là tout ce qui concerne l'app vivra dans `myapp`, séparé de `monitoring`, `ingress-nginx`, etc.
 kubectl create namespace myapp
-
-
-# Create the Laravel APP_KEY secret
-# --from-literal creates a key=value entry directly from the CLI
-# Kubernetes stores it base64-encoded internally
-# Crée un objet Kubernetes de type **Secret** nommé `myapp-secret`. Un Secret c'est comme un ConfigMap mais Kubernetes le traite différemment — il ne l'affiche pas en clair dans les logs, et il est encodé en base64 en interne.
-# `--from-literal=app-key="..."` crée une entrée dans ce Secret : la clé s'appelle `app-key`, la valeur c'est la Laravel APP_KEY. C'est cette valeur que le template `secret.yaml` du chart va lire et injecter dans le pod comme variable d'environnement `APP_KEY`.
-# `-n myapp` : crée ce Secret dans le namespace `myapp`.
-kubectl create secret generic myapp-secret \
-  --from-literal=app-key="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
-  -n myapp
-
-# Create the DB credentials secret
-# Key names mysql-password and mysql-root-password are REQUIRED by Bitnami MySQL —
-# the subchart looks for exactly these keys when existingSecret is set
-# Même principe mais avec deux entrées dans le même Secret. Les noms `mysql-password` et `mysql-root-password` ne sont **pas libres** — le chart Bitnami MySQL cherche exactement ces noms de clés quand tu lui indiques `existingSecret: myapp-db-secret` dans `values.yaml`. Si tu les appelles autrement, MySQL ne trouvera pas son mot de passe et ne démarrera pas.
-kubectl create secret generic myapp-db-secret \
-  --from-literal=mysql-password=app_password \
-  --from-literal=mysql-root-password=app_root_password \
-  -n myapp
 ```
 
-> Never put real values in `values.yaml`. Always inject at deploy time via `--set` or pre-created Secrets.
-
-### Pourquoi créer les Secrets avant le `helm install` ?
-
-Parce que le chart référence ces Secrets mais ne les crée pas lui-même depuis des valeurs fixes — il attend qu'ils existent déjà. Si tu fais `helm install` sans avoir créé les Secrets, les pods crashent immédiatement car les variables d'environnement `APP_KEY` et `DB_PASSWORD` sont introuvables.
+> Les Secrets sont créés automatiquement par Helm via `--set`. Ne pas les créer manuellement avec `kubectl` — sinon Helm refuse de les gérer.
 
 ---
 
-## Step 4 — Install
+## Step 3 — Install
 
 Run from `/home/cindy/projects/KubeQuest/infra-gitops` :
 
 ```bash
-# If a previous failed install exists, clean it up first
+# Si une release échouée existe déjà
 helm uninstall myapp -n myapp
+kubectl delete pvc --all -n myapp
+kubectl delete svc myapp-mysql -n myapp 2>/dev/null || true
 
 helm install myapp ./charts/myapp \
   --namespace myapp \
@@ -127,16 +136,51 @@ helm install myapp ./charts/myapp \
   --set image.tag=v0.1.0 \
   --set secret.appKey="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
   --set secret.dbPassword=app_password \
-  --set secret.dbRootPassword=app_root_password
+  --set secret.dbRootPassword=app_root_password \
+  --set mysql.enabled=false
 ```
 
-> Do not use `--wait` during initial setup — if something is wrong it will hang. Check pod status manually with `kubectl get pods -n myapp`. Add `--wait --timeout 5m` only once the chart is confirmed working.
+> Ne pas utiliser `--wait` lors de la première installation — utilise `kubectl get pods -n myapp` pour suivre manuellement.
 
-Verify the release is deployed:
+### Créer le service MySQL manuellement (si manquant)
 
 ```bash
-helm list -n myapp
-# STATUS should be: deployed
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-mysql
+  namespace: myapp
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  selector:
+    app: mysql
+EOF
+```
+
+---
+
+## Step 4 — Run migrations
+
+Les migrations Laravel doivent être exécutées une fois après le premier déploiement :
+
+```bash
+# Récupère le nom d'un pod app Running
+kubectl get pods -n myapp
+
+# Lance les migrations
+kubectl exec -n myapp <pod-name> -- php /var/www/html/artisan migrate --force
+```
+
+Attendu :
+```
+Migration table created successfully.
+Migrating: 2014_10_12_000000_create_users_table
+...
 ```
 
 ---
@@ -144,42 +188,34 @@ helm list -n myapp
 ## Step 5 — Verify
 
 ```bash
-# List all resources in the namespace (pods, deployments, services, replicasets)
 kubectl get all -n myapp
-
-# Check Ingress — confirm hostname app.kubequest.local has an IP assigned
 kubectl get ingress -n myapp
-
-# Check backup PVC — should be Bound (if Pending, no StorageClass is available)
 kubectl get pvc -n myapp
-
-# Check HPA — shows current replica count, CPU metrics, and min/max thresholds
-kubectl get hpa -n myapp
-
-# Stream app logs — look for Laravel boot errors (missing APP_KEY, DB unreachable, etc.)
-kubectl logs -n myapp deployment/myapp-myapp
 ```
 
-Add to `/etc/hosts` on your local machine:
+Ajoute à `/etc/hosts` :
 ```
 <ingress-public-ip>  app.kubequest.local
 ```
 
-Then test:
+Test :
 ```bash
 curl http://app.kubequest.local
+# Attendu : Hello world sample app
 ```
 
 ---
 
-## Upgrade (e.g. after a code change)
+## Upgrade
 
 ```bash
-# See REGISTRY.md for rebuild + push steps, then:
+# Sur kube-1 — rebuild si code modifié (voir REGISTRY.md)
+
+# Depuis WSL
 helm upgrade myapp ./charts/myapp \
   --namespace myapp \
   --set image.tag=v0.1.1 \
-  --wait --timeout 5m
+  --set mysql.enabled=false
 ```
 
 ---
@@ -187,41 +223,17 @@ helm upgrade myapp ./charts/myapp \
 ## Lint & dry-run
 
 ```bash
-# Validate chart syntax and required values — does NOT contact the cluster
 helm lint ./charts/myapp
-
-# Render all final YAML manifests and print them — does NOT apply anything
-# Useful to debug template rendering issues
 helm template myapp ./charts/myapp --debug
-
-# Full simulation: contacts the cluster to validate resources but creates nothing
-# Most complete pre-deploy test
 helm install myapp ./charts/myapp --dry-run --debug -n myapp
 ```
-
----
-
-## Notes on Laravel health endpoint
-
-Laravel 10+ exposes `/up` returning HTTP 200 when healthy (used by readiness + liveness probes).
-If your version doesn't have it, add it:
-
-```php
-// routes/web.php
-Route::get('/up', fn() => response()->json(['status' => 'ok']));
-```
-
-Or change the probe path to `/` in `values.yaml`.
 
 ---
 
 ## Rollback
 
 ```bash
-# View deployment history
 kubectl rollout history deployment/myapp-myapp -n myapp
-
-# Rollback to previous version
 kubectl rollout undo deployment/myapp-myapp -n myapp
 ```
 
@@ -231,12 +243,15 @@ kubectl rollout undo deployment/myapp-myapp -n myapp
 
 | Issue | Fix |
 |-------|-----|
-| Pod stuck in Init | MySQL not ready — `kubectl logs -n myapp <pod> -c wait-for-mysql` |
-| 500 error from Laravel | Missing APP_KEY or DB not migrated — check pod logs |
-| HPA not scaling | `kubectl top pods -n myapp` — metrics-server must be running |
-| PVC Pending | No default StorageClass — `kubectl get storageclass` |
-| DB auth error | Secret keys must be exactly `mysql-password` / `mysql-root-password` |
-| Image pull error | Check containerd config on the node — see `REGISTRY.md` |
+| PVC Pending | StorageClass manquante — installer local-path-provisioner |
+| DNS timeout dans les pods | Corriger CoreDNS pour utiliser `8.8.8.8` |
+| ImagePullBackOff | Pre-pull avec `ctr -n k8s.io images pull --plain-http` sur le node concerné |
+| `cannot re-use a name` | `helm uninstall myapp -n myapp` puis réinstaller |
+| `services myapp-mysql already exists` | `kubectl delete svc myapp-mysql -n myapp` |
+| Pod stuck Init:0/1 | DNS pas résolu ou service MySQL manquant |
+| Pod Running mais 0/1 | Probe échoue — vérifier les logs Apache |
+| 500 Laravel | Migrations non exécutées — `artisan migrate --force` |
+| Bitnami StatefulSet qui réapparaît | `kubectl delete statefulset myapp-mysql -n myapp` |
 
 ---
 
