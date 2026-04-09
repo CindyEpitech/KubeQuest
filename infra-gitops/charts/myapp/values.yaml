@@ -1,0 +1,73 @@
+# ── Application ──────────────────────────────────────────────
+replicaCount: 2
+
+image:
+  repository: registry.gitlab.com/your-group/myapp   # overridden by CI
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ── Service ───────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 80
+
+# ── Ingress ───────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: app.kubequest.local
+  path: /
+  pathType: Prefix
+
+# ── Resources (required by OPA policy) ───────────────────────
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+# ── HPA ───────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# ── Laravel application config (non-sensitive) ────────────────
+config:
+  appEnv: production
+  appDebug: "false"
+  appUrl: "http://app.kubequest.local"
+  dbConnection: mysql
+  dbPort: "3306"
+  dbDatabase: app_database
+  dbUsername: app_user
+
+# ── Secrets (injected at deploy time — never committed) ───────
+secret:
+  appKey: ""          # base64:... Laravel app key
+  dbPassword: ""
+  dbRootPassword: ""
+
+# ── MySQL ──────────────────────────────────
+mysql:
+  enabled: false
+
+# ── DB backup CronJob ─────────────────────────────────────────
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  pvcName: myapp-backup-pvc
+  pvcSize: 2Gi
+
+# ── Probes ─────────────────────────────────────────
+probes:
+  readiness:
+    path: /
+  liveness:
+    path: /

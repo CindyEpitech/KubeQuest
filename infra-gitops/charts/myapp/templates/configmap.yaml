@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myapp-config
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+data:
+  APP_ENV: {{ .Values.config.appEnv | quote }}
+  APP_DEBUG: {{ .Values.config.appDebug | quote }}
+  APP_URL: {{ .Values.config.appUrl | quote }}
+  DB_CONNECTION: {{ .Values.config.dbConnection | quote }}
+  DB_HOST: {{ include "myapp.mysqlHost" . | quote }}
+  DB_PORT: {{ .Values.config.dbPort | quote }}
+  DB_DATABASE: {{ .Values.config.dbDatabase | quote }}
+  DB_USERNAME: {{ .Values.config.dbUsername | quote }}
+---
+# MySQL init scripts — mirrors docker-compose ./mysql-init mount
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myapp-mysql-init
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+data:
+  # Add any .sql init scripts here if needed.
+  # The Bitnami chart mounts this ConfigMap via mysql.initdbScriptsConfigMa>
+  placeholder.sql: |
+    -- placeholder: add initial SQL scripts here

@@ -1,0 +1,9 @@
+# overlays/production/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base/nginx-ingress
+  - ../../base/kubernetes-dashboard
+  - ../../base/kube-prometheus
+  - ../../base/loki

@@ -1,0 +1,55 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "myapp.fullname" . }}-db-backup
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "myapp.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: db-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: db-backup
+              image: bitnami/mysql:8.0
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME -p$DB_P>
+                    > /backup/backup-$(date +%Y%m%d-%H%M%S).sql
+                  echo "Backup done."
+                  # Keep only last 7 backups
+                  ls -t /backup/*.sql | tail -n +8 | xargs -r rm
+              envFrom:
+                - configMapRef:
+                    name: myapp-config
+              env:
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: myapp-db-secret
+                      key: mysql-password
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: {{ .Values.backup.pvcName }}
+{{- end }}
