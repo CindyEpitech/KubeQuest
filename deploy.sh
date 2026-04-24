@@ -4,7 +4,7 @@ set -euo pipefail
 # ── Config ─────────────────────────────────────────────────────────────────
 # Update KUBE1_IP after every reboot (EC2 public IP changes)
 KUBE1_IP="35.180.255.74"
-SSH_KEY="$(dirname "$0")/kubequest-key-pair.pem"
+SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
 REGISTRY="10.0.9.227:5000"
 REPO_SSH="git@github.com:CindyEpitech/KubeQuest.git"
 REPO_DIR="~/KubeQuest"
