@@ -57,17 +57,18 @@ ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" bash <<REMOTE
   echo ""
 REMOTE
 
-# Pre-pull image on all cluster nodes (workaround for HTTP registry)
-# Node IPs fetched from WSL where kubectl is configured
+# Pre-pull image on all cluster nodes via ProxyJump through kube-1
+# WSL holds the key — no need for kube-1 to have SSH access to workers
 echo "  Pre-pulling image on all nodes..."
 NODE_IPS=$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
-ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" bash <<PREPULL
-  for NODE_IP in $NODE_IPS; do
-    echo "    -> \$NODE_IP"
-    ssh -o StrictHostKeyChecking=no ec2-user@\$NODE_IP \
-      "sudo ctr -n k8s.io images pull --plain-http $REGISTRY/myapp:$IMAGE_TAG" 2>/dev/null || true
-  done
-PREPULL
+for NODE_IP in $NODE_IPS; do
+  echo "    -> $NODE_IP"
+  ssh -i "$SSH_KEY" \
+    -o StrictHostKeyChecking=no \
+    -o ProxyJump="ec2-user@$KUBE1_IP" \
+    ec2-user@"$NODE_IP" \
+    "sudo ctr -n k8s.io images pull --plain-http $REGISTRY/myapp:$IMAGE_TAG" || true
+done
 
 echo ""
 echo "==> [2/3] Running helm upgrade (tag: $IMAGE_TAG)..."
