@@ -17,6 +17,10 @@ spec:
             app.kubernetes.io/component: db-backup
         spec:
           restartPolicy: OnFailure
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
           containers:
             - name: db-backup
               image: bitnami/mysql:8.0
