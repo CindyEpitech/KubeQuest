@@ -57,6 +57,18 @@ ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" bash <<REMOTE
   echo ""
 REMOTE
 
+# Pre-pull image on all cluster nodes (workaround for HTTP registry)
+# Node IPs fetched from WSL where kubectl is configured
+echo "  Pre-pulling image on all nodes..."
+NODE_IPS=$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" bash <<PREPULL
+  for NODE_IP in $NODE_IPS; do
+    echo "    -> \$NODE_IP"
+    ssh -o StrictHostKeyChecking=no ec2-user@\$NODE_IP \
+      "sudo ctr -n k8s.io images pull --plain-http $REGISTRY/myapp:$IMAGE_TAG" 2>/dev/null || true
+  done
+PREPULL
+
 echo ""
 echo "==> [2/3] Running helm upgrade (tag: $IMAGE_TAG)..."
 helm upgrade myapp "$SCRIPT_DIR/infra-gitops/charts/myapp" \
