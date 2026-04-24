@@ -31,6 +31,9 @@ ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" bash <<REMOTE
     sleep 2
   fi
 
+  # Trust GitHub's host key (needed on fresh EC2 instances)
+  ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+
   # Clone repo if not present, otherwise pull latest
   if [ ! -d "$REPO_DIR" ]; then
     echo "  Cloning repo..."
