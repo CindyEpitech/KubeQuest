@@ -24,7 +24,7 @@ spec:
                 - /bin/sh
                 - -c
                 - |
-                  mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME -p$DB_P>
+                  mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME -p$DB_PASSWORD $DB_DATABASE \
                     > /backup/backup-$(date +%Y%m%d-%H%M%S).sql
                   echo "Backup done."
                   # Keep only last 7 backups
