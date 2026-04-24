@@ -65,7 +65,7 @@ for NODE_IP in $NODE_IPS; do
   echo "    -> $NODE_IP"
   ssh -i "$SSH_KEY" \
     -o StrictHostKeyChecking=no \
-    -o ProxyJump="ec2-user@$KUBE1_IP" \
+    -o "ProxyCommand=ssh -i $SSH_KEY -o StrictHostKeyChecking=no -W %h:%p ec2-user@$KUBE1_IP" \
     ec2-user@"$NODE_IP" \
     "sudo ctr -n k8s.io images pull --plain-http $REGISTRY/myapp:$IMAGE_TAG" || true
 done
