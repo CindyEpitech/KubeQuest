@@ -20,8 +20,17 @@ spec:
       labels:
         {{- include "myapp.selectorLabels" . | nindent 8 }}
     spec:
-      # Spread replicas across different nodes
+      # Spread replicas across kube-1 and kube-2 nodes
       affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: role
+                    operator: NotIn
+                    values:
+                      - ingress
+                      - monitoring
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -33,7 +42,6 @@ spec:
                       values:
                         - {{ include "myapp.name" . }}
                 topologyKey: kubernetes.io/hostname
-
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
