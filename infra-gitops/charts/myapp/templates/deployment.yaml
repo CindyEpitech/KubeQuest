@@ -47,7 +47,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -z {{ include "myapp.mysqlHost" . }} {{ .Values.config.dbPort }};
+              until nc -z {{ include "myapp.mysqlHost" . }} {{ .Values.config.dbPort }}; do
                 echo "Waiting for MySQL..."; sleep 3
               done
           resources:
