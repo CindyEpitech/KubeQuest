@@ -17,6 +17,8 @@ A single command from WSL builds, pushes, and rolls out a new version of the app
 ```
 WSL (your laptop)
   │
+  ├── Resolve kube-1 public IP via AWS CLI (tag lookup)
+  │
   ├── (0) Query registry tags → resolve IMAGE_TAG
   │
   ├── (1) SSH → kube-1
@@ -28,7 +30,7 @@ WSL (your laptop)
   └── (3) helm upgrade → cluster rolls out new image
 ```
 
-Four stages, one command. Replaces the manual workflow from `PHASE_5_APP_GITOPS.md`.
+Four stages plus a dynamic IP-resolution step, one command. Replaces the manual workflow from `PHASE_5_APP_GITOPS.md`.
 
 ---
 
@@ -36,14 +38,64 @@ Four stages, one command. Replaces the manual workflow from `PHASE_5_APP_GITOPS.
 
 | Variable | What it is | When to update |
 |----------|------------|----------------|
-| `KUBE1_IP` | Public IP of kube-1 (EC2 control plane) | Every time kube-1 reboots |
+| `KUBE1_NAME_TAG` | EC2 `Name` tag of the kube-1 instance | Only if you rename the instance |
+| `AWS_REGION` | AWS region where kube-1 lives | Only if you move regions |
 | `SSH_KEY` | Path to the EC2 PEM key on WSL | Once |
 | `REGISTRY` | Private registry address (internal IP:port) | Never (unless you move it) |
 | `REPO_SSH` | GitHub SSH clone URL | Never |
 | `REPO_DIR` | Where the repo lives on kube-1 | Never |
 | `APP_KEY` / `DB_PASSWORD` / `DB_ROOT_PASSWORD` | Helm secrets | Move to `.env` if you don't want them in git |
 
+`KUBE1_IP` is **not configured manually** — the script looks it up from AWS at runtime using the tag above, so it survives EC2 reboots automatically.
+
 **Optional argument:** `IMAGE_TAG` — e.g. `v0.1.3`. If omitted, the script auto-increments. Never reuse a tag (Kubernetes caches images by tag).
+
+---
+
+## Prerequisites — AWS CLI setup (one-time)
+
+The script resolves kube-1's public IP via `aws ec2 describe-instances`, so the AWS CLI must be installed and configured on your WSL machine. Skip this section if `aws sts get-caller-identity` already works.
+
+### 1. Install AWS CLI v2
+
+```bash
+sudo apt-get update && sudo apt-get install -y unzip curl
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+rm -rf awscliv2.zip aws/
+aws --version          # → aws-cli/2.x.x ...
+```
+
+### 2. Create an IAM access key
+
+AWS Console → **IAM** → **Users** → your user → **Security credentials** → **Create access key** → choose *Command Line Interface (CLI)*. Copy both the Access Key ID and Secret Access Key before closing the page — the secret is shown only once.
+
+**Minimal IAM permission needed:** `ec2:DescribeInstances`. A purpose-specific user with just that action is safer than reusing an admin key.
+
+### 3. Configure the CLI
+
+```bash
+aws configure
+```
+
+| Prompt | Value |
+|--------|-------|
+| AWS Access Key ID | from step 2 |
+| AWS Secret Access Key | from step 2 |
+| Default region name | `eu-west-3a` |
+| Default output format | `json` |
+
+### 4. Verify
+
+```bash
+aws sts get-caller-identity
+aws ec2 describe-instances --region eu-west-3 \
+  --filters "Name=tag:Name,Values=kube-1" "Name=instance-state-name,Values=running" \
+  --query "Reservations[0].Instances[0].PublicIpAddress" --output text
+```
+
+The second command should print the kube-1 public IP. Once that works, `./deploy.sh` will resolve the IP automatically on every run.
 
 ---
 
@@ -125,10 +177,14 @@ If the rollout finished successfully, the new version is live.
 
 ## After a kube-1 reboot
 
-The EC2 public IP changes. Update `KUBE1_IP` at the top of `deploy.sh`, then update your local kubeconfig:
+The EC2 public IP changes, but **`deploy.sh` no longer needs a manual update** — it resolves the fresh IP from AWS at the start of every run.
+
+You still need to refresh your local kubeconfig so `kubectl` can reach the API server on the new IP:
 
 ```bash
-NEW_IP=<new-public-ip>
+NEW_IP=$(aws ec2 describe-instances --region eu-west-3 \
+  --filters "Name=tag:Name,Values=kube-1" "Name=instance-state-name,Values=running" \
+  --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
 sed -i "s|https://.*:6443|https://$NEW_IP:6443|" ~/.kube/config
 kubectl get nodes
 ```
@@ -160,6 +216,8 @@ kubectl rollout undo deployment/myapp-myapp -n myapp
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `tag '...' already exists in the registry` | You passed a tag that's already in the registry | Use a higher tag, or omit the argument to auto-increment |
+| `Could not resolve a running instance tagged Name=kube-1` | AWS CLI not configured, wrong region, or kube-1 stopped | Run `aws sts get-caller-identity` to check creds; verify `AWS_REGION`; confirm the instance is running |
+| `aws: command not found` | AWS CLI v2 not installed on WSL | See [Prerequisites — AWS CLI setup](#prerequisites--aws-cli-setup-one-time) |
 | `Permission denied (publickey)` on stage 1 | PEM key path wrong or permissions too open | `chmod 600` the key; update `SSH_KEY` |
 | `Host key verification failed` cloning the repo | Fresh kube-1, no GitHub host key | Already handled by `ssh-keyscan` in the script |
 | `destination path '~/KubeQuest' already exists` | Previous clone failed mid-way | Already handled — script wipes incomplete clones |
