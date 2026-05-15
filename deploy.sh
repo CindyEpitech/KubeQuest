@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # ── Config ─────────────────────────────────────────────────────────────────
-# Update KUBE1_IP after every reboot (EC2 public IP changes)
-KUBE1_IP="35.180.255.74"
+# kube-1 public IP is resolved dynamically from AWS (see "Resolving kube-1 IP" below)
+KUBE1_NAME_TAG="kube-1"
+AWS_REGION="eu-west-3"
 SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
 REGISTRY="10.0.9.227:5000"
 REPO_SSH="git@github.com:CindyEpitech/KubeQuest.git"
@@ -20,6 +21,23 @@ DB_ROOT_PASSWORD="app_root_password"
 REQUESTED_TAG="${1:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo ""
+echo "==> Resolving kube-1 public IP from AWS (tag: Name=$KUBE1_NAME_TAG, region: $AWS_REGION)..."
+KUBE1_IP=$(aws ec2 describe-instances \
+  --region "$AWS_REGION" \
+  --filters "Name=tag:Name,Values=$KUBE1_NAME_TAG" "Name=instance-state-name,Values=running" \
+  --query "Reservations[0].Instances[0].PublicIpAddress" \
+  --output text 2>/dev/null || echo "")
+
+if [ -z "$KUBE1_IP" ] || [ "$KUBE1_IP" = "None" ]; then
+  echo "  ERROR: Could not resolve a running instance tagged Name=$KUBE1_NAME_TAG in $AWS_REGION."
+  echo "  Check:"
+  echo "    - aws sts get-caller-identity      (are credentials configured?)"
+  echo "    - aws ec2 describe-instances --region $AWS_REGION  (does the instance exist and is it running?)"
+  exit 1
+fi
+echo "  kube-1 public IP: $KUBE1_IP"
 
 echo ""
 echo "==> [0/3] Resolving image tag..."
