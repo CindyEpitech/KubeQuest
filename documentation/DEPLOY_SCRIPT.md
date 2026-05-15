@@ -53,14 +53,17 @@ Four stages plus a dynamic IP-resolution step, one command. Replaces the manual 
 
 ### Per-user SSH keys
 
-Each collaborator declares their own PEM path with a `<UPPERCASE_USERNAME>_SSH_KEY` variable at the top of `deploy.sh`:
+Each collaborator declares their own PEM path with a `<UPPERCASE_USERNAME>_SSH_KEY` variable at the top of `deploy.sh`. Use **absolute paths** — `$HOME` breaks if anyone runs the script under `sudo`.
 
 ```bash
-CINDY_SSH_KEY="$HOME/projects/kubequest-key-pair.pem"
-# TEAMMATE_SSH_KEY="$HOME/projects/teammate-key-pair.pem"
+CINDY_SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
+OLIVIER_SSH_KEY="/Users/yolive/Documents/KubeQuest/kubequest-key-pair.pem"
+# TEAMMATE_SSH_KEY="/home/teammate/projects/teammate-key-pair.pem"
 ```
 
-The script picks the right one based on the first argument (or `$USER` if you don't pass one). If your username has no matching variable, it fails fast and tells you exactly what line to add.
+The script picks the right one based on the first argument (or `$USER` if you don't pass one). The username is case-insensitive (`cindy`, `Cindy`, and `CINDY` all resolve to `CINDY_SSH_KEY`). If your username has no matching variable, the script fails fast and tells you exactly what line to add.
+
+**macOS compatibility:** the lookup uses `tr` rather than bash 4's `${var^^}` so it works on macOS's built-in bash 3.2.
 
 **Arguments:**
 

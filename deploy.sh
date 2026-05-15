@@ -12,10 +12,10 @@ REPO_DIR="~/KubeQuest"
 # ── Per-user SSH keys ──────────────────────────────────────────────────────
 # Add one variable per collaborator: <UPPERCASE_USERNAME>_SSH_KEY
 # Selected at runtime via the first argument (./deploy.sh cindy) or $USER.
-CINDY_SSH_KEY="$HOME/projects/kubequest-key-pair.pem"
+# Use absolute paths — $HOME breaks if the script runs under sudo.
+CINDY_SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
 OLIVIER_SSH_KEY="/Users/yolive/Documents/KubeQuest/kubequest-key-pair.pem"
- 
-# TEAMMATE_SSH_KEY="$HOME/projects/teammate-key-pair.pem"
+# TEAMMATE_SSH_KEY="/home/teammate/projects/teammate-key-pair.pem"
 
 # ── Secrets — move to .env and source it if you don't want these in git ────
 APP_KEY="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4="
@@ -30,14 +30,17 @@ DB_ROOT_PASSWORD="app_root_password"
 DEPLOY_USER="${1:-$USER}"
 REQUESTED_TAG="${2:-}"
 
-# Resolve <UPPERCASE_USERNAME>_SSH_KEY via indirect expansion
-USER_KEY_VAR="${DEPLOY_USER^^}_SSH_KEY"
-SSH_KEY="${!USER_KEY_VAR:-}"
+# Resolve <UPPERCASE_USERNAME>_SSH_KEY via indirect expansion.
+# Use `tr` instead of bash 4's ${var^^} so this works on macOS (bash 3.2).
+USER_KEY_VAR="$(echo "$DEPLOY_USER" | tr '[:lower:]' '[:upper:]')_SSH_KEY"
+set +u
+SSH_KEY="${!USER_KEY_VAR}"
+set -u
 
-if [ -z "$SSH_KEY" ]; then
+if [ -z "${SSH_KEY:-}" ]; then
   echo "ERROR: No SSH key configured for user '$DEPLOY_USER' (expected variable $USER_KEY_VAR)."
-  echo "  Add a line at the top of deploy.sh, e.g.:"
-  echo "    ${USER_KEY_VAR}=\"\$HOME/projects/${DEPLOY_USER}-key-pair.pem\""
+  echo "  Add a line at the top of deploy.sh with an absolute path, e.g.:"
+  echo "    ${USER_KEY_VAR}=\"/home/${DEPLOY_USER}/projects/kubequest-key-pair.pem\""
   exit 1
 fi
 
