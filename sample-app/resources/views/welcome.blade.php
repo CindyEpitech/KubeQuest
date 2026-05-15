@@ -5,8 +5,8 @@
         integrity="sha256-2Pmvv0kuTBOenSvLm6bvfBSSHrUJ+3A7x6P5Ebd07/g="
         crossorigin="anonymous"></script>
     </head>
-    <body>
-        <h1>Hello world sample app</h1>
+    <body style="background-color: #4CAF50; font-family: sans-serif; text-align: center; padding: 50px;">
+        <h1>Hello world sample app - v2</h1>
         <p>Counter :<p id="value">{{ $value }}</p></p>
         <button id="add">+1</button>
 
