@@ -3,11 +3,14 @@
 A single command from WSL builds, pushes, and rolls out a new version of the app.
 
 ```bash
-# Auto-increment patch from the latest tag in the registry
+# Use current $USER, auto-increment patch from the latest tag
 ./deploy.sh
 
-# Or pass an explicit tag (validated against the registry)
-./deploy.sh v0.2.0
+# Deploy as a specific collaborator (selects their SSH key)
+./deploy.sh cindy
+
+# Explicit user + explicit tag
+./deploy.sh cindy v0.2.0
 ```
 
 ---
@@ -40,7 +43,7 @@ Four stages plus a dynamic IP-resolution step, one command. Replaces the manual 
 |----------|------------|----------------|
 | `KUBE1_NAME_TAG` | EC2 `Name` tag of the kube-1 instance | Only if you rename the instance |
 | `AWS_REGION` | AWS region where kube-1 lives | Only if you move regions |
-| `SSH_KEY` | Path to the EC2 PEM key on WSL | Once |
+| `<USER>_SSH_KEY` | Path to each collaborator's PEM key (e.g. `CINDY_SSH_KEY`) | Once per collaborator |
 | `REGISTRY` | Private registry address (internal IP:port) | Never (unless you move it) |
 | `REPO_SSH` | GitHub SSH clone URL | Never |
 | `REPO_DIR` | Where the repo lives on kube-1 | Never |
@@ -48,7 +51,26 @@ Four stages plus a dynamic IP-resolution step, one command. Replaces the manual 
 
 `KUBE1_IP` is **not configured manually** — the script looks it up from AWS at runtime using the tag above, so it survives EC2 reboots automatically.
 
-**Optional argument:** `IMAGE_TAG` — e.g. `v0.1.3`. If omitted, the script auto-increments. Never reuse a tag (Kubernetes caches images by tag).
+### Per-user SSH keys
+
+Each collaborator declares their own PEM path with a `<UPPERCASE_USERNAME>_SSH_KEY` variable at the top of `deploy.sh`:
+
+```bash
+CINDY_SSH_KEY="$HOME/projects/kubequest-key-pair.pem"
+# TEAMMATE_SSH_KEY="$HOME/projects/teammate-key-pair.pem"
+```
+
+The script picks the right one based on the first argument (or `$USER` if you don't pass one). If your username has no matching variable, it fails fast and tells you exactly what line to add.
+
+**Arguments:**
+
+| Form | What it does |
+|------|--------------|
+| `./deploy.sh` | Uses `$USER` (your WSL username), auto-increments tag |
+| `./deploy.sh cindy` | Deploys as `cindy` (uses `CINDY_SSH_KEY`), auto-increments tag |
+| `./deploy.sh cindy v0.2.0` | Deploys as `cindy`, uses explicit tag (validated against the registry) |
+
+Never reuse a tag (Kubernetes caches images by tag).
 
 ---
 
@@ -216,6 +238,8 @@ kubectl rollout undo deployment/myapp-myapp -n myapp
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `tag '...' already exists in the registry` | You passed a tag that's already in the registry | Use a higher tag, or omit the argument to auto-increment |
+| `No SSH key configured for user '<name>'` | Your username has no `<UPPERCASE>_SSH_KEY` variable | Add the line the script suggests at the top of `deploy.sh` |
+| `SSH key not found at <path>` | Variable is set but the file doesn't exist | Fix the path, or move/rename the `.pem` to match |
 | `Could not resolve a running instance tagged Name=kube-1` | AWS CLI not configured, wrong region, or kube-1 stopped | Run `aws sts get-caller-identity` to check creds; verify `AWS_REGION`; confirm the instance is running |
 | `aws: command not found` | AWS CLI v2 not installed on WSL | See [Prerequisites — AWS CLI setup](#prerequisites--aws-cli-setup-one-time) |
 | `Permission denied (publickey)` on stage 1 | PEM key path wrong or permissions too open | `chmod 600` the key; update `SSH_KEY` |

@@ -5,20 +5,47 @@ set -euo pipefail
 # kube-1 public IP is resolved dynamically from AWS (see "Resolving kube-1 IP" below)
 KUBE1_NAME_TAG="kube-1"
 AWS_REGION="eu-west-3"
-SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
 REGISTRY="10.0.9.227:5000"
 REPO_SSH="git@github.com:CindyEpitech/KubeQuest.git"
 REPO_DIR="~/KubeQuest"
+
+# ── Per-user SSH keys ──────────────────────────────────────────────────────
+# Add one variable per collaborator: <UPPERCASE_USERNAME>_SSH_KEY
+# Selected at runtime via the first argument (./deploy.sh cindy) or $USER.
+CINDY_SSH_KEY="$HOME/projects/kubequest-key-pair.pem"
+OLIVIER_SSH_KEY="/Users/yolive/Documents/KubeQuest/kubequest-key-pair.pem"
+ 
+# TEAMMATE_SSH_KEY="$HOME/projects/teammate-key-pair.pem"
 
 # ── Secrets — move to .env and source it if you don't want these in git ────
 APP_KEY="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4="
 DB_PASSWORD="app_password"
 DB_ROOT_PASSWORD="app_root_password"
 
-# ── Image tag — optional argument ──────────────────────────────────────────
-# If provided: validate it doesn't already exist in the registry
-# If omitted:  auto-increment the patch version from the latest tag
-REQUESTED_TAG="${1:-}"
+# ── Args ───────────────────────────────────────────────────────────────────
+# Usage:
+#   ./deploy.sh                   → user defaults to $USER, auto-increment tag
+#   ./deploy.sh cindy             → explicit user, auto-increment tag
+#   ./deploy.sh cindy v0.2.0      → explicit user and tag
+DEPLOY_USER="${1:-$USER}"
+REQUESTED_TAG="${2:-}"
+
+# Resolve <UPPERCASE_USERNAME>_SSH_KEY via indirect expansion
+USER_KEY_VAR="${DEPLOY_USER^^}_SSH_KEY"
+SSH_KEY="${!USER_KEY_VAR:-}"
+
+if [ -z "$SSH_KEY" ]; then
+  echo "ERROR: No SSH key configured for user '$DEPLOY_USER' (expected variable $USER_KEY_VAR)."
+  echo "  Add a line at the top of deploy.sh, e.g.:"
+  echo "    ${USER_KEY_VAR}=\"\$HOME/projects/${DEPLOY_USER}-key-pair.pem\""
+  exit 1
+fi
+
+if [ ! -f "$SSH_KEY" ]; then
+  echo "ERROR: SSH key not found at $SSH_KEY (user: $DEPLOY_USER)"
+  exit 1
+fi
+echo "Deploying as user: $DEPLOY_USER  (key: $SSH_KEY)"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
