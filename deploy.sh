@@ -14,10 +14,40 @@ APP_KEY="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4="
 DB_PASSWORD="app_password"
 DB_ROOT_PASSWORD="app_root_password"
 
-# ── Image tag — required argument ───────────────────────────────────────────
-IMAGE_TAG="${1:?Usage: ./deploy.sh <image-tag>  e.g. ./deploy.sh v0.1.1}"
+# ── Image tag — optional argument ──────────────────────────────────────────
+# If provided: validate it doesn't already exist in the registry
+# If omitted:  auto-increment the patch version from the latest tag
+REQUESTED_TAG="${1:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo ""
+echo "==> [0/3] Resolving image tag..."
+# Query the registry through kube-1 (registry is on internal IP)
+TAGS_JSON=$(ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" "curl -s http://$REGISTRY/v2/myapp/tags/list" 2>/dev/null || echo '{"tags":[]}')
+EXISTING_TAGS=$(echo "$TAGS_JSON" | sed 's/.*"tags":\[\([^]]*\)\].*/\1/' | tr ',' '\n' | tr -d '" ' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+
+if [ -n "$REQUESTED_TAG" ]; then
+  # Validate: tag must not already exist
+  if echo "$EXISTING_TAGS" | grep -qx "$REQUESTED_TAG"; then
+    echo "  ERROR: tag '$REQUESTED_TAG' already exists in the registry."
+    echo "  Existing tags:"
+    echo "$EXISTING_TAGS" | sed 's/^/    /'
+    exit 1
+  fi
+  IMAGE_TAG="$REQUESTED_TAG"
+  echo "  Using requested tag: $IMAGE_TAG"
+else
+  # Auto-increment: find highest vX.Y.Z and bump the patch
+  LATEST=$(echo "$EXISTING_TAGS" | sort -V | tail -1)
+  if [ -z "$LATEST" ]; then
+    IMAGE_TAG="v0.1.0"
+  else
+    IMAGE_TAG=$(echo "$LATEST" | awk -F. '{print $1"."$2"."$3+1}')
+  fi
+  echo "  Latest tag in registry: ${LATEST:-<none>}"
+  echo "  Auto-incremented to:    $IMAGE_TAG"
+fi
 
 echo ""
 echo "==> [1/3] Building and pushing image on kube-1 (tag: $IMAGE_TAG)..."
