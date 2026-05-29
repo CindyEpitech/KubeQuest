@@ -11,26 +11,34 @@ For install steps and the full design, see
 ```
 ---
 
-## ⚠️ Live apps track `develop`, committed manifests track `main`
+## ✅ Branch tracking reconciled (2026-05-29)
 
-The Applications were installed live (2026-05-29) **overridden to track `develop`**
-for sync testing. The committed manifests in `infra-gitops/argocd/applications/`
-still track **`main`**.
-
-**Why:** `main` was behind `develop` and missing `values-production.yaml` and the
+There was previously a divergence: the live Applications were installed
+**overridden to track `develop`** for sync testing, while the committed manifests
+in `infra-gitops/argocd/applications/` tracked **`main`**. This was needed because
+`main` was behind `develop` and missing `values-production.yaml` and the
 `secret.create` toggle — syncing `myapp` against `main` would have failed and
 clobbered the live secrets.
 
-**After merging `develop → main`,** re-point the live apps to match the committed
-(main-tracking) manifests:
+**This is now resolved.** `develop` was fast-forward merged into `main` and the live
+apps were re-pointed to the committed manifests:
 
 ```bash
+git checkout main && git merge --ff-only develop && git push origin main
 kubectl apply -f infra-gitops/argocd/applications/
 ```
 
-Until then this is expected — don't be confused that
-`kubectl -n argocd get app` shows `develop` while the YAML says `main`. That's the
-known override, not drift.
+Current expected state — committed YAML and live cluster now match:
+
+| App | Tracks | Namespace |
+|-----|--------|-----------|
+| `infra`     | `main`    | `default`   |
+| `myapp`     | `main`    | `myapp`     |
+| `myapp-dev` | `develop` | `myapp-dev` |
+
+The pre-created `myapp-secret` / `myapp-db-secret` survived the re-point (annotation
+tracking did its job). `myapp-dev` tracking `develop` is **by design** (it's the dev
+environment), not drift.
 
 ---
 
