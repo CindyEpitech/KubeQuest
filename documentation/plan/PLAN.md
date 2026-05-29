@@ -4,7 +4,7 @@ The 12 bonus items grouped into 4 ordered phases. Each phase has clear pass crit
 
 | Phase | Theme | Effort | Why this order |
 |-------|-------|--------|----------------|
-| **A** | Verify foundations | ½–1 day | Prove existing claims (persistence, backup) work and add atomic rollback. Finding a broken foundation 2 days before demo is fatal. |
+| **A** | Verify foundations | ½–1 day | Prove existing claims (persistence, backup) work and add automatic rollback. Finding a broken foundation 2 days before demo is fatal. |
 | **B** | Demo polish | 2–3 days | High visual impact, low effort. This is what the jury sees. |
 | **C** | Security baseline | 2–3 days | Scores points on the security rubric and makes the demo credible. |
 | **D** | Heavy lifts | 3–5 days | Restructures how things work. Only safe to start once A–C are solid. |
@@ -13,7 +13,7 @@ The 12 bonus items grouped into 4 ordered phases. Each phase has clear pass crit
 
 ## Dependency rules between phases
 
-- **A.3 (atomic rollback) before D.1 (CI)** — CI failing a bad deploy is great, but runtime failures must also roll back without CI's help.
+- **A.3 (automatic rollback) before D.1 (CI)** — CI failing a bad deploy is great, but runtime failures must also roll back without CI's help.
 - **C.1 (secrets) before C.2 (auth)** — Dex stores its own client secret, oauth2-proxy stores a cookie secret. Clean secret storage first.
 - **B.1 (load test) needs B.3 (alerts)** to demo well — the memory alert should *not* fire during normal HPA scaling, but *should* fire when you overwhelm the cluster on purpose.
 - **D.2 (ArgoCD) last** — once ArgoCD owns deploys, `deploy.sh` becomes obsolete. Don't migrate until the manual path is rock-solid.
@@ -128,9 +128,9 @@ A backup you can't restore is not a backup. Restore the latest dump into a scrat
 
 ## A.3 — Auto-rollback on unhealthy deploy *(10 min)*
 
-One-line change to [deploy.sh](../../deploy.sh). Helm's `--atomic` means "if the deploy fails or times out, roll back automatically".
+One-line change to [deploy.sh](../../deploy.sh). Helm's `--rollback-on-failure` means "if the deploy fails or times out, roll back automatically".
 
-### Step 1 — Add `--atomic` (and `--install` for idempotency)
+### Step 1 — Add `--rollback-on-failure` (and `--install` for idempotency)
 
 In `deploy.sh`, find the `helm upgrade myapp` block and add the flags:
 
@@ -138,7 +138,7 @@ In `deploy.sh`, find the `helm upgrade myapp` block and add the flags:
 helm upgrade myapp "$SCRIPT_DIR/infra-gitops/charts/myapp" \
   --namespace myapp \
   --install \
-  --atomic \
+  --rollback-on-failure \
   --set image.repository="$REGISTRY/myapp" \
   --set image.tag="$IMAGE_TAG" \
   ...
@@ -163,20 +163,20 @@ kubectl get deploy -n myapp -o jsonpath='{.items[*].spec.template.spec.container
 
 **Pass criterion:** the deploy failed, but the cluster is still running the previous working version.
 
-`--atomic` covers two bonus items at once: **auto rollback** and **cancel deployment when unhealthy** (Helm waits for readiness, fails the deploy if probes don't go green within `--timeout`, then rolls back).
+`--rollback-on-failure` covers two bonus items at once: **auto rollback** and **cancel deployment when unhealthy** (Helm waits for readiness, fails the deploy if probes don't go green within `--timeout`, then rolls back).
 
 ---
 
 ## Phase A checklist
 
 ```
-[ ] A.1.1  PVC mysql-data is Bound
-[ ] A.1.4  Sentinel row survives pod deletion
-[ ] A.2.2  Manual CronJob run completes
-[ ] A.2.3  Backup .sql file exists on the PVC
-[ ] A.2.4  Backup restores cleanly into a scratch DB
-[ ] A.3.1  --atomic + --install added to deploy.sh
-[ ] A.3.2  Forced bad deploy auto-rolls-back
+[x] A.1.1  PVC mysql-data is Bound
+[x] A.1.4  Sentinel row survives pod deletion
+[x] A.2.2  Manual CronJob run completes
+[x] A.2.3  Backup .sql file exists on the PVC
+[x] A.2.4  Backup restores cleanly into a scratch DB
+[x] A.3.1  --rollback-on-failure + --install added to deploy.sh
+[x] A.3.2  Forced bad deploy auto-rolls-back
 ```
 
 ---
@@ -293,9 +293,9 @@ Migration plan:
 
 ```
 Phase A
-[ ] Persistance verified
-[ ] DB backup verified end-to-end (including restore)
-[ ] --atomic / --install added to deploy.sh, rollback proven
+[x] Persistance verified
+[x] DB backup verified end-to-end (including restore)
+[x] --rollback-on-failure / --install added to deploy.sh, rollback proven
 
 Phase B
 [ ] Live load test demonstrates HPA scaling

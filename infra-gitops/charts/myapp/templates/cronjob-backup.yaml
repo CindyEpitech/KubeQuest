@@ -17,18 +17,28 @@ spec:
             app.kubernetes.io/component: db-backup
         spec:
           restartPolicy: OnFailure
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: node-role.kubernetes.io/control-plane
+                        operator: DoesNotExist
+                      - key: role
+                        operator: DoesNotExist
           tolerations:
             - key: node-role.kubernetes.io/control-plane
               operator: Exists
               effect: NoSchedule
           containers:
             - name: db-backup
-              image: bitnami/mysql:8.0
+              image: 10.0.9.227:5000/mysql:8.0
               command:
                 - /bin/sh
                 - -c
                 - |
-                  mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME -p$DB_PASSWORD $DB_DATABASE \
+                  set -e
+                  mysqldump --no-tablespaces -h $DB_HOST -P $DB_PORT -u $DB_USERNAME -p$DB_PASSWORD $DB_DATABASE \
                     > /backup/backup-$(date +%Y%m%d-%H%M%S).sql
                   echo "Backup done."
                   # Keep only last 7 backups

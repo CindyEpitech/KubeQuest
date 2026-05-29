@@ -152,6 +152,8 @@ echo ""
 echo "==> [2/3] Running helm upgrade (tag: $IMAGE_TAG)..."
 helm upgrade myapp "$SCRIPT_DIR/infra-gitops/charts/myapp" \
   --namespace myapp \
+  --install \
+  --rollback-on-failure \
   --set image.repository="$REGISTRY/myapp" \
   --set image.tag="$IMAGE_TAG" \
   --set secret.appKey="$APP_KEY" \
