@@ -20,7 +20,8 @@ KUBE1_NAME_TAG="kube-1"
 AWS_REGION="eu-west-3"
 REGISTRY="10.0.9.227:5000"
 REPO_SSH="git@github.com:CindyEpitech/KubeQuest.git"
-REPO_DIR="~/KubeQuest"
+REPO_DIR="/home/ec2-user/KubeQuest"   # absolute: '~' does not expand inside quoted tests
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-develop}"
 APP_URL="http://app.kubequest.local"
 
 # ── Per-user SSH keys ────────────────────────────────────────────────────────
@@ -180,15 +181,17 @@ ssh -i "$SSH_KEY" ec2-user@"$KUBE1_IP" bash <<REMOTE
   ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
 
   if [ ! -d "$REPO_DIR/.git" ]; then
-    rm -rf $REPO_DIR
+    rm -rf "$REPO_DIR"
     echo "  Cloning repo..."
-    git clone $REPO_SSH $REPO_DIR
-  else
-    echo "  Pulling latest code..."
-    cd $REPO_DIR && git pull
+    git clone "$REPO_SSH" "$REPO_DIR"
   fi
+  echo "  Checking out $DEPLOY_BRANCH (latest)..."
+  cd "$REPO_DIR"
+  git fetch origin --quiet
+  git checkout "$DEPLOY_BRANCH"
+  git reset --hard "origin/$DEPLOY_BRANCH"
 
-  cd $REPO_DIR/sample-app
+  cd "$REPO_DIR/sample-app"
   echo "  Building image..."
   sudo nerdctl build -t $REGISTRY/myapp:$IMAGE_TAG .
   echo "  Pushing image..."
