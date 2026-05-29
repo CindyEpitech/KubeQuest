@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+# Installs ArgoCD itself (pinned) plus our namespace and ingress.
+# Application CRs live in applications/ and are applied separately, AFTER
+# this install, so the Application CRD is established first.
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.0/manifests/install.yaml
+  - ingress.yaml
+
+# Override the (empty) argocd-cmd-params-cm shipped by upstream to run the
+# API server in HTTP mode behind the nginx ingress.
+patches:
+  - path: cmd-params-cm.yaml
+    target:
+      kind: ConfigMap
+      name: argocd-cmd-params-cm

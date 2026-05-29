@@ -1,0 +1,14 @@
+# Production overrides consumed by the ArgoCD "myapp" Application.
+# This is the file CI (Phase D.1) bumps to roll out a new image tag under GitOps.
+image:
+  repository: 10.0.9.227:5000/myapp
+  tag: v0.1.8
+
+# Secrets are pre-created in the myapp namespace (not managed by GitOps).
+# See infra-gitops/argocd/README.md.
+secret:
+  create: false
+
+# MySQL is managed outside this release.
+mysql:
+  enabled: false

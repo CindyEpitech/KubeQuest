@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd
+  namespace: argocd
+  annotations:
+    # argocd-server runs in insecure (HTTP) mode (see cmd-params-cm.yaml),
+    # so the ingress talks plain HTTP to the backend.
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.kubequest.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80

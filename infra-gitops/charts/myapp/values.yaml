@@ -50,6 +50,11 @@ config:
 
 # ── Secrets (injected at deploy time — never committed) ───────
 secret:
+  # create=true: chart renders the Secret objects from the values below
+  #   (used by deploy.sh, which injects the real values via --set).
+  # create=false: the Secret is assumed to already exist in the namespace
+  #   (used by the ArgoCD GitOps flow — see infra-gitops/argocd/).
+  create: true
   appKey: ""          # base64:... Laravel app key
   dbPassword: ""
   dbRootPassword: ""

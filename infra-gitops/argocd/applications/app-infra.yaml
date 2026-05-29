@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra
+  namespace: argocd
+  # Keep the Application around if it is ever deleted by accident.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CindyEpitech/KubeQuest.git
+    targetRevision: main
+    path: infra-gitops/overlays/production
+  destination:
+    server: https://kubernetes.default.svc
+    # Resources in the overlay carry their own namespace (monitoring,
+    # kubernetes-dashboard, ...); this is only the default for any that don't.
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
