@@ -20,10 +20,12 @@ APP_URL="http://app.kubequest.local"
 CINDY_SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
 OLIVIER_SSH_KEY="/Users/yolive/Documents/KubeQuest/kubequest-key-pair.pem"
 
-# ── Secrets — move to .env and source it if you don't want these in git ─────
-APP_KEY="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4="
-DB_PASSWORD="app_password"
-DB_ROOT_PASSWORD="app_root_password"
+# ── Secrets ────────────────────────────────────────────────────────────────
+# Load real values from an ignored .env file, or fall back to the existing
+# Kubernetes Secrets when redeploying an already-bootstrapped cluster.
+APP_KEY="${APP_KEY:-}"
+DB_PASSWORD="${DB_PASSWORD:-}"
+DB_ROOT_PASSWORD="${DB_ROOT_PASSWORD:-}"
 
 # ── Args ─────────────────────────────────────────────────────────────────────
 # Usage:
@@ -47,6 +49,13 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/.env"
+  set +a
+fi
+
 echo -e "\n${BOLD}KubeQuest deploy${NC}  user: ${BOLD}${DEPLOY_USER}${NC}  key: ${SSH_KEY}"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -60,6 +69,22 @@ if [ -z "$KUBECTL_CTX" ]; then
   fail "No active kubectl context. Run: kubectl config use-context <name>"
 fi
 ok "kubectl context: $KUBECTL_CTX"
+
+# Helm secrets: prefer .env values, otherwise reuse the current in-cluster secrets.
+if [ -z "${APP_KEY:-}" ]; then
+  APP_KEY=$(kubectl get secret -n myapp myapp-secret -o jsonpath='{.data.app-key}' 2>/dev/null | base64 --decode || true)
+fi
+if [ -z "${DB_PASSWORD:-}" ]; then
+  DB_PASSWORD=$(kubectl get secret -n myapp myapp-db-secret -o jsonpath='{.data.mysql-password}' 2>/dev/null | base64 --decode || true)
+fi
+if [ -z "${DB_ROOT_PASSWORD:-}" ]; then
+  DB_ROOT_PASSWORD=$(kubectl get secret -n myapp myapp-db-secret -o jsonpath='{.data.mysql-root-password}' 2>/dev/null | base64 --decode || true)
+fi
+
+if [ -z "${APP_KEY:-}" ] || [ -z "${DB_PASSWORD:-}" ] || [ -z "${DB_ROOT_PASSWORD:-}" ]; then
+  fail "Missing APP_KEY, DB_PASSWORD, or DB_ROOT_PASSWORD. Create $SCRIPT_DIR/.env from .env.example."
+fi
+ok "Helm secrets loaded without storing them in git"
 
 # AWS credentials
 AWS_ACCOUNT=$(aws sts get-caller-identity --region "$AWS_REGION" --query Account --output text 2>/dev/null || true)
@@ -172,13 +197,13 @@ for NODE_IP in $NODE_IPS; do
 done
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  STEP 2 — Helm upgrade (atomic + install)
+#  STEP 2 — Helm upgrade (rollback-on-failure + install)
 # ═══════════════════════════════════════════════════════════════════════════
 step "[2/3] Helm upgrade (tag: $IMAGE_TAG)..."
 helm upgrade myapp "$SCRIPT_DIR/infra-gitops/charts/myapp" \
   --namespace myapp \
   --install \
-  --atomic \
+  --rollback-on-failure \
   --set image.repository="$REGISTRY/myapp" \
   --set image.tag="$IMAGE_TAG" \
   --set secret.appKey="$APP_KEY" \

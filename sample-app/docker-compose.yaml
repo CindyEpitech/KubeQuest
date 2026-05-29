@@ -24,13 +24,13 @@ services:
     environment:
       APP_DEBUG: "true"
       APP_ENV: "dev"
-      APP_KEY: "base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4="
+      APP_KEY: "${APP_KEY:-}"
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
       DB_DATABASE: app_database
       DB_USERNAME: app_user
-      DB_PASSWORD: app_password
+      DB_PASSWORD: "${DB_PASSWORD:-changeme}"
     depends_on:
       - db
     labels:
@@ -43,8 +43,8 @@ services:
     environment:
       MYSQL_DATABASE: app_database
       MYSQL_USER: app_user
-      MYSQL_PASSWORD: app_password
-      MYSQL_ROOT_PASSWORD: app_root_password
+      MYSQL_PASSWORD: "${DB_PASSWORD:-changeme}"
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-changeme-root}"
       MYSQL_TCP_PORT: 3306
     volumes:
       - db_data:/var/lib/mysql

@@ -4,6 +4,7 @@ kind: Kustomization
 
 resources:
   - ../../base/nginx-ingress
+  - ../../base/auth
   - ../../base/kubernetes-dashboard
   - ../../base/kube-prometheus
   - ../../base/loki
