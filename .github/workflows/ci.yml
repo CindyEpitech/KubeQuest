@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  # ── Job 1 : PHPUnit ────────────────────────────────────────────────────────
+  test:
+    name: PHPUnit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sample-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo_sqlite, sqlite3
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/' .env
+          sed -i 's/^DB_DATABASE=.*/DB_DATABASE=\/tmp\/test.sqlite/' .env
+          touch /tmp/test.sqlite
+
+      - name: Generate app key
+        run: php artisan key:generate
+
+      - name: Run migrations
+        run: php artisan migrate --force
+
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit --testdox
+
+  # ── Job 2 : Docker build ───────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t myapp:ci-check ./sample-app
