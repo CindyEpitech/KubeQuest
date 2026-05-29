@@ -18,3 +18,14 @@ Route::get('/', function () {
     $value = Counter::sum('count');
     return view('welcome', ['value' => $value]);
 });
+
+// Demo endpoint: burns CPU for ~5 s to trigger HPA scaling during load tests.
+Route::get('/cpu', function () {
+    $start = microtime(true);
+    while (microtime(true) - $start < 5.0) {
+        for ($i = 0; $i < 50000; $i++) {
+            sqrt(rand());
+        }
+    }
+    return response()->json(['status' => 'cpu spike done', 'duration_s' => 5]);
+});

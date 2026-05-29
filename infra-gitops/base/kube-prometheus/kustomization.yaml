@@ -4,3 +4,6 @@ kind: Kustomization
 resources:
   - grafana-ingress.yaml
   - prometheus-ingress.yaml
+  - alert-memory.yaml
+  - dashboards/app-dashboard.yaml
+  - dashboards/infra-dashboard.yaml

@@ -1,0 +1,25 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kubequest-node-alerts
+  namespace: monitoring
+  labels:
+    # kube-prometheus-stack picks up rules with this label
+    release: kube-prometheus
+spec:
+  groups:
+    - name: kubequest.node.memory
+      interval: 1m
+      rules:
+        - alert: NodeMemoryLow
+          expr: |
+            node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100 < 20
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node memory low: {{ $labels.instance }}"
+            description: >
+              Available memory on {{ $labels.instance }} has been below 20%
+              for more than 5 minutes. Consider scaling the node or
+              investigating memory-hungry workloads.
