@@ -62,7 +62,7 @@ mysql:
 backup:
   enabled: true
   schedule: "0 2 * * *"
-  pvcName: myapp-backup-pvc-v2
+  pvcName: myapp-backup-pvc
   pvcSize: 2Gi
 
 # ── Probes ─────────────────────────────────────────
