@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Upstream metrics-server, pinned to the version running in the cluster.
+resources:
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.8.1/components.yaml
+
+# Two changes vs upstream, both required on this kubeadm + Flannel cluster:
+#  1. --kubelet-insecure-tls — node kubelet serving certs have no IP SANs,
+#     so metrics-server can't verify them.
+#  2. hostNetwork + port 4443 — the kube-apiserver runs on the control-plane
+#     host network and cannot route to a metrics-server pod on the Flannel
+#     overlay of another node, so the aggregation layer times out. Running
+#     metrics-server on hostNetwork lets the apiserver reach it via node IP.
+#     Port moves to 4443 to avoid clashing with the kubelet on 10250.
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: metrics-server
+      namespace: kube-system
+    patch: |-
+      - op: add
+        path: /spec/template/spec/hostNetwork
+        value: true
+      - op: add
+        path: /spec/template/spec/dnsPolicy
+        value: ClusterFirstWithHostNet
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --cert-dir=/tmp
+          - --secure-port=4443
+          - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+          - --kubelet-use-node-status-port
+          - --metric-resolution=15s
+          - --kubelet-insecure-tls
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/containerPort
+        value: 4443

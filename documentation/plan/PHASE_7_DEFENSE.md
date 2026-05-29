@@ -136,6 +136,12 @@ helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --set controller.nodeSelector.role=ingress \
   --wait
 
+echo "==> Deploying metrics-server (required by HPA)..."
+# Vendored + patched in infra-gitops/base/metrics-server (hostNetwork + insecure-tls
+# for this kubeadm/Flannel cluster). Applied early so the HPA has CPU metrics.
+kubectl apply -k infra-gitops/base/metrics-server/
+kubectl rollout status deployment/metrics-server -n kube-system --timeout=120s
+
 echo "==> Deploying Kubernetes Dashboard..."
 helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard \
   --namespace kubernetes-dashboard --create-namespace \
