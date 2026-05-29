@@ -7,6 +7,13 @@ step() { echo -e "\n${CYAN}${BOLD}==> $(date +%H:%M:%S)${NC}${CYAN} $*${NC}"; }
 ok()   { echo -e "${GREEN}  ✓  $*${NC}"; }
 fail() { echo -e "${RED}  ✗  $*${NC}" >&2; exit 1; }
 warn() { echo -e "${YELLOW}  !  $*${NC}"; }
+decode_b64() {
+  if base64 --help 2>&1 | grep -q -- '--decode'; then
+    base64 --decode
+  else
+    base64 -D
+  fi
+}
 
 # ── Config ──────────────────────────────────────────────────────────────────
 KUBE1_NAME_TAG="kube-1"
@@ -69,22 +76,10 @@ if [ -z "$KUBECTL_CTX" ]; then
   fail "No active kubectl context. Run: kubectl config use-context <name>"
 fi
 ok "kubectl context: $KUBECTL_CTX"
-
-# Helm secrets: prefer .env values, otherwise reuse the current in-cluster secrets.
-if [ -z "${APP_KEY:-}" ]; then
-  APP_KEY=$(kubectl get secret -n myapp myapp-secret -o jsonpath='{.data.app-key}' 2>/dev/null | base64 --decode || true)
+KUBECTL_CLUSTER=$(kubectl config view -o jsonpath="{.contexts[?(@.name==\"$KUBECTL_CTX\")].context.cluster}" 2>/dev/null || true)
+if [ -z "$KUBECTL_CLUSTER" ]; then
+  fail "Could not resolve cluster name for kubectl context $KUBECTL_CTX"
 fi
-if [ -z "${DB_PASSWORD:-}" ]; then
-  DB_PASSWORD=$(kubectl get secret -n myapp myapp-db-secret -o jsonpath='{.data.mysql-password}' 2>/dev/null | base64 --decode || true)
-fi
-if [ -z "${DB_ROOT_PASSWORD:-}" ]; then
-  DB_ROOT_PASSWORD=$(kubectl get secret -n myapp myapp-db-secret -o jsonpath='{.data.mysql-root-password}' 2>/dev/null | base64 --decode || true)
-fi
-
-if [ -z "${APP_KEY:-}" ] || [ -z "${DB_PASSWORD:-}" ] || [ -z "${DB_ROOT_PASSWORD:-}" ]; then
-  fail "Missing APP_KEY, DB_PASSWORD, or DB_ROOT_PASSWORD. Create $SCRIPT_DIR/.env from .env.example."
-fi
-ok "Helm secrets loaded without storing them in git"
 
 # AWS credentials
 AWS_ACCOUNT=$(aws sts get-caller-identity --region "$AWS_REGION" --query Account --output text 2>/dev/null || true)
@@ -108,6 +103,27 @@ if [ -z "$KUBE1_IP" ] || [ "$KUBE1_IP" = "None" ]; then
   fail "No running instance tagged Name=$KUBE1_NAME_TAG in $AWS_REGION.\n  Check: aws ec2 describe-instances --region $AWS_REGION"
 fi
 ok "kube-1 IP: $KUBE1_IP"
+
+kubectl config set-cluster "$KUBECTL_CLUSTER" \
+  --server="https://$KUBE1_IP:6443" \
+  --insecure-skip-tls-verify=true >/dev/null
+ok "kubectl API server updated: https://$KUBE1_IP:6443"
+
+# Helm secrets: prefer .env values, otherwise reuse the current in-cluster secrets.
+if [ -z "${APP_KEY:-}" ]; then
+  APP_KEY=$(kubectl get secret -n myapp myapp-secret -o jsonpath='{.data.app-key}' 2>/dev/null | decode_b64 || true)
+fi
+if [ -z "${DB_PASSWORD:-}" ]; then
+  DB_PASSWORD=$(kubectl get secret -n myapp myapp-db-secret -o jsonpath='{.data.mysql-password}' 2>/dev/null | decode_b64 || true)
+fi
+if [ -z "${DB_ROOT_PASSWORD:-}" ]; then
+  DB_ROOT_PASSWORD=$(kubectl get secret -n myapp myapp-db-secret -o jsonpath='{.data.mysql-root-password}' 2>/dev/null | decode_b64 || true)
+fi
+
+if [ -z "${APP_KEY:-}" ] || [ -z "${DB_PASSWORD:-}" ] || [ -z "${DB_ROOT_PASSWORD:-}" ]; then
+  fail "Missing APP_KEY, DB_PASSWORD, or DB_ROOT_PASSWORD. Create $SCRIPT_DIR/.env from .env.example."
+fi
+ok "Helm secrets loaded without storing them in git"
 
 # Registry reachability (through kube-1)
 step "[pre-flight] Checking registry reachability (through kube-1)..."
