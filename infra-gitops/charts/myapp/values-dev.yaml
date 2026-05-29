@@ -1,0 +1,23 @@
+# Dev overrides consumed by the ArgoCD "myapp-dev" Application (tracks develop).
+# Deploys into the myapp-dev namespace with its own ingress host and its own
+# standalone MySQL (mysql.enabled=false => the chart ships its own MySQL).
+image:
+  repository: 10.0.9.227:5000/myapp
+  tag: v0.1.8
+
+# Secrets are pre-created in the myapp-dev namespace (not managed by GitOps).
+secret:
+  create: false
+
+# Dev gets its own standalone MySQL inside myapp-dev (isolated from prod).
+mysql:
+  enabled: false
+
+# Separate hostname so dev doesn't collide with prod's app.kubequest.local.
+ingress:
+  host: app-dev.kubequest.local
+
+config:
+  appEnv: dev
+  appDebug: "true"
+  appUrl: "http://app-dev.kubequest.local"
