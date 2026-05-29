@@ -16,10 +16,40 @@ pull-based, self-healing loop and a visual UI.
 | `cmd-params-cm.yaml` | Patch enabling `server.insecure` (TLS terminates at the ingress) |
 | `ingress.yaml` | `argocd.kubequest.local` over plain HTTP, consistent with the other services |
 | `applications/app-infra.yaml` | Application tracking `infra-gitops/overlays/production` (kustomize) |
-| `applications/app-myapp.yaml` | Application tracking the `infra-gitops/charts/myapp` Helm chart |
+| `applications/app-myapp.yaml` | **prod** app: chart on `main` → `myapp` namespace (`values-production.yaml`) |
+| `applications/app-myapp-dev.yaml` | **dev** app: chart on `develop` → `myapp-dev` namespace (`values-dev.yaml`) |
 
-Both Applications track **`main`** with `automated.prune=true` and
-`automated.selfHeal=true`.
+All `automated.prune=true` + `automated.selfHeal=true`.
+
+## Environments (prod / dev)
+
+The app runs as two ArgoCD Applications, one per branch:
+
+| App | Branch | Namespace | Ingress host | Values |
+|-----|--------|-----------|--------------|--------|
+| `myapp` (prod) | `main` | `myapp` | `app.kubequest.local` | `values-production.yaml` |
+| `myapp-dev` | `develop` | `myapp-dev` | `app-dev.kubequest.local` | `values-dev.yaml` |
+
+Push to `develop` → dev updates. Merge to `main` → prod updates. Each namespace
+gets its **own** standalone MySQL (`mysql.enabled=false`), so the data is
+isolated. `infra` stays a single cluster-wide app (not duplicated per env).
+
+### Bootstrapping a fresh app environment
+
+A new namespace has empty secrets and an empty DB, so before/after the app syncs:
+
+```bash
+# 1. Pre-create the secrets (ArgoCD does not manage them)
+kubectl -n <ns> create secret generic myapp-secret \
+  --from-literal=app-key="$APP_KEY"
+kubectl -n <ns> create secret generic myapp-db-secret \
+  --from-literal=mysql-password="$DB_PASSWORD" \
+  --from-literal=mysql-root-password="$DB_ROOT_PASSWORD"
+
+# 2. After the app + MySQL are up, migrate + seed the fresh DB once
+#    (run as a one-off Job using the app image — see app-dev bootstrap history,
+#     or: php artisan migrate --force --seed)
+```
 
 ## Install (one-time)
 
