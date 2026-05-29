@@ -80,9 +80,9 @@ helm upgrade myapp ./charts/myapp \
   --namespace myapp \
   --set image.repository=10.0.9.227:5000/myapp \
   --set image.tag=v0.1.1 \
-  --set secret.appKey="base64:DJYTvaRkEZ/YcQsX3TMpB0iCjgme2rhlIOus9A1hnj4=" \
-  --set secret.dbPassword=app_password \
-  --set secret.dbRootPassword=app_root_password \
+  --set secret.appKey="$APP_KEY" \
+  --set secret.dbPassword="$DB_PASSWORD" \
+  --set secret.dbRootPassword="$DB_ROOT_PASSWORD" \
   --set mysql.enabled=false \
   --wait \
   --timeout 5m

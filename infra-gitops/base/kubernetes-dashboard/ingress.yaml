@@ -6,6 +6,8 @@ metadata:
   namespace: kubernetes-dashboard
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/auth-url: "http://10.106.205.160:4180/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "http://dashboard.kubequest.local/oauth2/start?rd=$escaped_request_uri"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
     nginx.ingress.kubernetes.io/ssl-redirect: "false"

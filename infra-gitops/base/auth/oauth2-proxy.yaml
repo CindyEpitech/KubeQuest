@@ -1,0 +1,260 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy-dashboard
+  namespace: oauth2-proxy
+  labels:
+    app.kubernetes.io/name: oauth2-proxy-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2-proxy-dashboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oauth2-proxy-dashboard
+    spec:
+      hostAliases:
+        - ip: "10.98.36.134"
+          hostnames:
+            - dex.kubequest.local
+      containers:
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+          args:
+            - --provider=oidc
+            - --oidc-issuer-url=http://dex.kubequest.local
+            - --client-id=oauth2-proxy
+            - --client-secret=$(OAUTH2_PROXY_CLIENT_SECRET)
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --cookie-secure=false
+            - --cookie-domain=.kubequest.local
+            - --email-domain=*
+            - --http-address=0.0.0.0:4180
+            - --redirect-url=http://dashboard.kubequest.local/oauth2/callback
+            - --reverse-proxy=true
+            - --set-xauthrequest=true
+            - --skip-provider-button=true
+            - --upstream=static://200
+            - --whitelist-domain=.kubequest.local
+          envFrom:
+            - secretRef:
+                name: oauth2-proxy-secrets
+          ports:
+            - name: http
+              containerPort: 4180
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy-grafana
+  namespace: oauth2-proxy
+  labels:
+    app.kubernetes.io/name: oauth2-proxy-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2-proxy-grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oauth2-proxy-grafana
+    spec:
+      hostAliases:
+        - ip: "10.98.36.134"
+          hostnames:
+            - dex.kubequest.local
+      containers:
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+          args:
+            - --provider=oidc
+            - --oidc-issuer-url=http://dex.kubequest.local
+            - --client-id=oauth2-proxy
+            - --client-secret=$(OAUTH2_PROXY_CLIENT_SECRET)
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --cookie-secure=false
+            - --cookie-domain=.kubequest.local
+            - --email-domain=*
+            - --http-address=0.0.0.0:4180
+            - --redirect-url=http://grafana.kubequest.local/oauth2/callback
+            - --reverse-proxy=true
+            - --set-xauthrequest=true
+            - --skip-provider-button=true
+            - --upstream=static://200
+            - --whitelist-domain=.kubequest.local
+          envFrom:
+            - secretRef:
+                name: oauth2-proxy-secrets
+          ports:
+            - name: http
+              containerPort: 4180
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy-prometheus
+  namespace: oauth2-proxy
+  labels:
+    app.kubernetes.io/name: oauth2-proxy-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2-proxy-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oauth2-proxy-prometheus
+    spec:
+      hostAliases:
+        - ip: "10.98.36.134"
+          hostnames:
+            - dex.kubequest.local
+      containers:
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+          args:
+            - --provider=oidc
+            - --oidc-issuer-url=http://dex.kubequest.local
+            - --client-id=oauth2-proxy
+            - --client-secret=$(OAUTH2_PROXY_CLIENT_SECRET)
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --cookie-secure=false
+            - --cookie-domain=.kubequest.local
+            - --email-domain=*
+            - --http-address=0.0.0.0:4180
+            - --redirect-url=http://prometheus.kubequest.local/oauth2/callback
+            - --reverse-proxy=true
+            - --set-xauthrequest=true
+            - --skip-provider-button=true
+            - --upstream=static://200
+            - --whitelist-domain=.kubequest.local
+          envFrom:
+            - secretRef:
+                name: oauth2-proxy-secrets
+          ports:
+            - name: http
+              containerPort: 4180
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy-dashboard
+  namespace: oauth2-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oauth2-proxy-dashboard
+  ports:
+    - name: http
+      port: 4180
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy-grafana
+  namespace: oauth2-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oauth2-proxy-grafana
+  ports:
+    - name: http
+      port: 4180
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy-prometheus
+  namespace: oauth2-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oauth2-proxy-prometheus
+  ports:
+    - name: http
+      port: 4180
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oauth2-proxy-dashboard
+  namespace: oauth2-proxy
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dashboard.kubequest.local
+      http:
+        paths:
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: oauth2-proxy-dashboard
+                port:
+                  number: 4180
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oauth2-proxy-grafana
+  namespace: oauth2-proxy
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: grafana.kubequest.local
+      http:
+        paths:
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: oauth2-proxy-grafana
+                port:
+                  number: 4180
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oauth2-proxy-prometheus
+  namespace: oauth2-proxy
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: prometheus.kubequest.local
+      http:
+        paths:
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: oauth2-proxy-prometheus
+                port:
+                  number: 4180

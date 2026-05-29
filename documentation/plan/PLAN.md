@@ -240,7 +240,7 @@ Today `APP_KEY`, `DB_PASSWORD`, `DB_ROOT_PASSWORD` are passed via `--set` from `
 
 Recommended: **sealed-secrets** — best balance for a school project, demonstrates secret hygiene.
 
-**Pass criterion:** `git grep -i "base64:DJYTvaRkEZ"` returns nothing in the repo, but the app still starts after a fresh deploy.
+**Pass criterion:** `git grep -i "<old-real-app-key-prefix>"` returns nothing in the repo, but the app still starts after a fresh deploy.
 
 ## C.2 — Cluster authentication (Dex + oauth2-proxy) *(1–2 days)*
 
@@ -304,8 +304,8 @@ Phase B
 [ ] deploy.sh polished (colors, timestamps, pre-flight)
 
 Phase C
-[ ] Secrets removed from git; deploy still works
-[ ] Dex + oauth2-proxy protecting Grafana / Dashboard / Prometheus
+[x] Secrets removed from git; deploy still works
+[x] Dex + oauth2-proxy protecting Grafana / Dashboard / Prometheus
 
 Phase D
 [ ] CI gates merges to main
