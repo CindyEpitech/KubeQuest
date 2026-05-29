@@ -12,3 +12,7 @@ secret:
 # MySQL is managed outside this release.
 mysql:
   enabled: false
+
+# GitOps sync test (Phase D.2): bumped from the chart default of 6.
+autoscaling:
+  maxReplicas: 7
