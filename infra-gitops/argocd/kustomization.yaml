@@ -18,3 +18,7 @@ patches:
     target:
       kind: ConfigMap
       name: argocd-cmd-params-cm
+  - path: cm.yaml
+    target:
+      kind: ConfigMap
+      name: argocd-cm

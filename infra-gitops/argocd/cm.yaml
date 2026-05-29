@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # Track managed resources by annotation, not by the app.kubernetes.io/instance
+  # label. The myapp Helm chart sets that label on its objects (including the
+  # pre-created Secrets), and with the default label-based tracking ArgoCD would
+  # adopt and PRUNE those Secrets. Annotation tracking scopes ArgoCD to only the
+  # resources it actually applied.
+  application.resourceTrackingMethod: annotation
