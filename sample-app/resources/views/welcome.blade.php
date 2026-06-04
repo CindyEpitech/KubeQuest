@@ -37,26 +37,6 @@
                 -webkit-font-smoothing: antialiased;
             }
 
-            .topbar {
-                display: flex;
-                align-items: baseline;
-                gap: 10px;
-                padding: 18px 32px;
-                border-bottom: 1px solid var(--border);
-            }
-
-            .topbar__title {
-                font-size: 16px;
-                font-weight: 600;
-                letter-spacing: -0.01em;
-            }
-
-            .topbar__version {
-                font-size: 13px;
-                font-weight: 500;
-                color: var(--muted);
-            }
-
             .stage {
                 flex: 1;
                 display: flex;
@@ -65,6 +45,21 @@
                 justify-content: center;
                 gap: 8px;
                 padding: 24px;
+                text-align: center;
+            }
+
+            .stage__title {
+                margin: 0 0 4px;
+                font-size: 22px;
+                font-weight: 600;
+                letter-spacing: -0.01em;
+            }
+
+            .stage__version {
+                margin: 0 0 40px;
+                font-size: 13px;
+                font-weight: 500;
+                color: var(--muted);
             }
 
             .counter__label {
@@ -121,12 +116,10 @@
         </style>
     </head>
     <body>
-        <header class="topbar">
-            <span class="topbar__title">KubeQuest App</span>
-            <span class="topbar__version">v2</span>
-        </header>
-
         <main class="stage">
+            <h1 class="stage__title">KubeQuest App</h1>
+            <p class="stage__version">v2</p>
+
             <p class="counter__label">Counter</p>
             <p class="counter__value" id="value">{{ $value }}</p>
 
