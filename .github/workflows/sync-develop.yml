@@ -1,0 +1,45 @@
+name: Sync develop with main
+
+# After anything lands on main (PR merges, promotion commits), fast-forward
+# develop so it stays in lockstep and future develop->main PRs show a clean diff.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# If several pushes to main happen close together, let the latest one win
+# instead of racing parallel syncs.
+concurrency:
+  group: sync-develop
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Fast-forward develop to main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fast-forward develop onto main
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+
+          if git merge-base --is-ancestor origin/develop origin/main; then
+            git merge --ff-only origin/main
+            git push origin develop
+            echo "✅ develop fast-forwarded to main ($(git rev-parse --short origin/main))."
+          else
+            echo "::warning::develop has commits not on main — cannot fast-forward."
+            echo "Someone pushed directly to develop after the last main merge."
+            echo "Reconcile manually:  git checkout develop && git merge origin/main && git push origin develop"
+            exit 1
+          fi
