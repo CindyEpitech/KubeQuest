@@ -53,16 +53,17 @@ Two workflows in [`.github/workflows/`](../.github/workflows/) keep the
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `promote.yml` | push to `main` changing `values-dev.yaml` | Opens a PR copying the dev image tag into `values-production.yaml`. Merging it rolls the tag out to prod via ArgoCD (no rebuild). |
-| `sync-develop.yml` | any push to `main` | Fast-forwards `develop` up to `main` so the two stay in lockstep and the next `develop → main` PR shows a clean diff. |
+| `sync-develop.yml` | any push to `main` | Opens a `main → develop` PR and enables auto-merge, so `develop` catches up to `main` once CI is green. |
 
-`sync-develop.yml` uses `git merge --ff-only` as a guard: if someone has pushed
-**directly** to `develop` since the last merge to `main`, it can't fast-forward, so
-it **fails the run** (with reconcile instructions) instead of creating a tangle —
-in that case run `git checkout develop && git merge origin/main && git push` once.
+`develop` is a protected branch (required checks), so the workflow can't push to it
+directly — it opens a `main → develop` PR and turns on **auto-merge**. The `ci.yml`
+checks run on it and, since `develop` requires no review approvals, it merges itself
+once they pass. After a `develop → main` PR merges, the sync PR appears within a
+minute and merges a few minutes later — no manual `git merge origin/main`.
 
-> So after a PR merges to `main`, `develop` catches up automatically — no manual
-> `git merge origin/main`. (If `develop` is ever a protected branch, the Action's
-> token push may need to be allowed.)
+> Requires repo setting **Allow auto-merge** = on (already enabled). If `develop`
+> ever has commits that aren't on `main` too, the sync PR still merges `main` in
+> cleanly (it just adds a merge commit).
 
 ---
 

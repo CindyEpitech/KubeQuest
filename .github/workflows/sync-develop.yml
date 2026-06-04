@@ -1,45 +1,56 @@
 name: Sync develop with main
 
-# After anything lands on main (PR merges, promotion commits), fast-forward
-# develop so it stays in lockstep and future develop->main PRs show a clean diff.
+# After anything lands on main (PR merges, promotion commits), bring those
+# commits back into develop so the branches stay in lockstep. develop is a
+# protected branch (required status checks), so we can't push to it directly —
+# instead we open a main -> develop PR and let it auto-merge once CI is green.
 on:
   push:
     branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
 
-# If several pushes to main happen close together, let the latest one win
-# instead of racing parallel syncs.
 concurrency:
   group: sync-develop
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   sync:
-    name: Fast-forward develop to main
+    name: Open auto-merging sync PR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: develop
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fast-forward develop onto main
+      - name: Open/refresh main -> develop sync PR with auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
+          git fetch origin main develop
 
-          if git merge-base --is-ancestor origin/develop origin/main; then
-            git merge --ff-only origin/main
-            git push origin develop
-            echo "✅ develop fast-forwarded to main ($(git rev-parse --short origin/main))."
-          else
-            echo "::warning::develop has commits not on main — cannot fast-forward."
-            echo "Someone pushed directly to develop after the last main merge."
-            echo "Reconcile manually:  git checkout develop && git merge origin/main && git push origin develop"
-            exit 1
+          # Nothing to do if develop already contains every commit on main.
+          if [ -z "$(git rev-list origin/develop..origin/main)" ]; then
+            echo "develop already contains main — nothing to sync."
+            exit 0
           fi
+
+          # Reuse an open sync PR if one exists, otherwise open one.
+          PR=$(gh pr list --base develop --head main --state open \
+                 --json number --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            PR=$(gh pr create --base develop --head main \
+                   --title "chore: sync develop with main" \
+                   --body "Automated by the **Sync develop with main** workflow. Brings the merges/promotions on \`main\` back into \`develop\` so the branches stay in lockstep. Auto-merges once the required checks pass." \
+                 | grep -oE '[0-9]+$')
+            echo "Opened sync PR #$PR"
+          else
+            echo "Reusing existing sync PR #$PR"
+          fi
+
+          # Merge automatically once required checks pass (develop needs no approvals).
+          gh pr merge "$PR" --auto --merge
+          echo "Auto-merge enabled on PR #$PR — it merges when CI is green."
