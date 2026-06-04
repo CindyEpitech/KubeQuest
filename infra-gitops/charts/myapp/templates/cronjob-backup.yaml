@@ -10,10 +10,18 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      # Clean up finished backup pods so they don't linger. Lingering Completed
+      # pods have no CPU metrics and, if they match the web Deployment selector,
+      # the HPA treats them as 100% and refuses to scale down.
+      ttlSecondsAfterFinished: 600
       template:
         metadata:
+          # IMPORTANT: do NOT use myapp.selectorLabels here. That is the web
+          # Deployment's selector ({name, instance}); if backup pods carry it the
+          # HPA counts them. Use name + component only (no instance) so these
+          # pods never match the Deployment/Service selector.
           labels:
-            {{- include "myapp.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/name: {{ include "myapp.name" . }}
             app.kubernetes.io/component: db-backup
         spec:
           restartPolicy: OnFailure
