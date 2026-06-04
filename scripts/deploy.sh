@@ -195,7 +195,13 @@ if [ "$DO_BUILD" = true ]; then
   step "[build] Building & pushing image on kube-1 (tag: $IMAGE_TAG)..."
   ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ec2-user@"$KUBE1_IP" bash <<REMOTE
     set -euo pipefail
-    if ! pgrep -x buildkitd > /dev/null; then echo "  Starting buildkitd..."; sudo buildkitd & sleep 2; fi
+    if ! pgrep -x buildkitd > /dev/null; then
+      echo "  Starting buildkitd..."
+      # Fully detach from the SSH channel (redirect all fds + nohup), otherwise
+      # the backgrounded daemon keeps the ssh session open and deploy.sh hangs.
+      sudo sh -c 'nohup buildkitd >/tmp/buildkitd.log 2>&1 < /dev/null &'
+      sleep 3
+    fi
     ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
     if [ ! -d "$REPO_DIR/.git" ]; then rm -rf "$REPO_DIR"; echo "  Cloning repo..."; git clone "$REPO_SSH" "$REPO_DIR"; fi
     cd "$REPO_DIR"
