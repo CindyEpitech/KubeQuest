@@ -50,7 +50,7 @@
 
             .stage__title {
                 margin: 0 0 4px;
-                font-size: 22px;
+                font-size: clamp(24px, 5vw, 82px);
                 font-weight: 600;
                 letter-spacing: -0.01em;
             }
