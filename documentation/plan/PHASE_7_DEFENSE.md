@@ -131,9 +131,18 @@ helm repo add dex https://charts.dexidp.io
 helm repo update
 
 echo "==> Deploying nginx-ingress..."
+# hostNetwork + DaemonSet so the controller binds node ports 80/443 (see PHASE_3).
+# dnsPolicy=ClusterFirstWithHostNet is REQUIRED with hostNetwork — without it the
+# pod uses the node's AWS DNS, can't resolve *.svc.cluster.local, and the oauth2-proxy
+# auth-url subrequest fails => Grafana/Prometheus/Dashboard return 500.
 helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --namespace ingress-nginx --create-namespace \
   --set controller.nodeSelector.role=ingress \
+  --set controller.hostNetwork=true \
+  --set controller.hostPort.enabled=true \
+  --set controller.dnsPolicy=ClusterFirstWithHostNet \
+  --set controller.service.type=ClusterIP \
+  --set controller.kind=DaemonSet \
   --wait
 
 echo "==> Deploying metrics-server (required by HPA)..."
