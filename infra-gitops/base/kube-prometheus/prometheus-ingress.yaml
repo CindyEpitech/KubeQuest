@@ -5,7 +5,7 @@ metadata:
   name: prometheus
   namespace: monitoring
   annotations:
-    nginx.ingress.kubernetes.io/auth-url: "http://10.109.82.254:4180/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-url: "http://oauth2-proxy-prometheus.oauth2-proxy.svc.cluster.local:4180/oauth2/auth"
     nginx.ingress.kubernetes.io/auth-signin: "http://prometheus.kubequest.local/oauth2/start?rd=$escaped_request_uri"
 spec:
   ingressClassName: nginx

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: opa-bad-no-resources
+  namespace: default
+spec:
+  containers:
+    - name: nginx
+      image: nginx:1.27
