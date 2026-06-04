@@ -9,3 +9,18 @@ resources:
   - templates/disallow-latest-tag.yaml
   - constraints/require-resources.yaml
   - constraints/disallow-latest-tag.yaml
+
+patches:
+  - path: patches/namespace-podsecurity.yaml
+    target:
+      kind: Namespace
+      name: gatekeeper-system
+  - path: patches/controller-manager-hostnetwork.yaml
+    target:
+      kind: Deployment
+      name: gatekeeper-controller-manager
+      namespace: gatekeeper-system
+  - path: patches/validating-webhook-fail.yaml
+    target:
+      kind: ValidatingWebhookConfiguration
+      name: gatekeeper-validating-webhook-configuration
