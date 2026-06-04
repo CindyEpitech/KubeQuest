@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gatekeeper-system
+  labels:
+    # The API server cannot reach Flannel pod IPs in this cluster, so the
+    # Gatekeeper webhook runs with hostNetwork. That requires relaxing PSS only
+    # for Gatekeeper's own namespace.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest

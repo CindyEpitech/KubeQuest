@@ -1,0 +1,10 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gatekeeper-controller-manager
+  namespace: gatekeeper-system
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
