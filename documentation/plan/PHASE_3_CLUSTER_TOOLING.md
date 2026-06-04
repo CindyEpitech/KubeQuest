@@ -143,11 +143,16 @@ helm install ingress-nginx ingress-nginx/ingress-nginx \
   --set controller.nodeSelector.role=ingress \
   --set controller.hostNetwork=true \
   --set controller.hostPort.enabled=true \
+  --set controller.dnsPolicy=ClusterFirstWithHostNet \
   --set controller.service.type=ClusterIP \
   --set controller.kind=DaemonSet
 ```
 
 - `hostNetwork=true` + `hostPort.enabled=true` — binds the pod directly to the node's ports 80 and 443
+- `dnsPolicy=ClusterFirstWithHostNet` — **required** with `hostNetwork`. Without it the
+  pod falls back to the node's resolver (AWS VPC DNS) and cannot resolve any
+  `*.svc.cluster.local`, which breaks the oauth2-proxy `auth-url` subrequest and makes
+  Grafana/Prometheus/Dashboard return **500**.
 - `kind=DaemonSet` — ensures one pod per matching node
 - `service.type=ClusterIP` — external traffic enters via the host network directly, no LoadBalancer needed
 
