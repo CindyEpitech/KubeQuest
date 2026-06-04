@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Official Gatekeeper install manifest, pinned for reproducible GitOps.
+  # Source: https://open-policy-agent.github.io/gatekeeper/website/docs/v3.17.x/install/
+  - https://raw.githubusercontent.com/open-policy-agent/gatekeeper/v3.17.2/deploy/gatekeeper.yaml
+  - templates/required-resources.yaml
+  - templates/disallow-latest-tag.yaml
+  - constraints/require-resources.yaml
+  - constraints/disallow-latest-tag.yaml

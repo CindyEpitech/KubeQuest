@@ -9,3 +9,4 @@ resources:
   - ../../base/kubernetes-dashboard
   - ../../base/kube-prometheus
   - ../../base/loki
+  - ../../base/gatekeeper
