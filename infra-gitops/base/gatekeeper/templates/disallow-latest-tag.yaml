@@ -58,5 +58,5 @@ spec:
         }
 
         is_latest_or_missing_tag(image) {
-          not contains(last(split(image, "/")), ":")
+          regex.match("(^|.*/)[^/:]+$", image)
         }

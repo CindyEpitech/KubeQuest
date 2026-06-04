@@ -8,10 +8,10 @@ metadata:
 spec:
   enforcementAction: deny
   match:
-    excludedNamespaces:
-      - kube-system
-      - gatekeeper-system
-      - argocd
+    namespaces:
+      - default
+      - myapp
+      - myapp-dev
     kinds:
       - apiGroups: [""]
         kinds: ["Pod"]

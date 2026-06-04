@@ -5,8 +5,9 @@ This base installs OPA Gatekeeper and enforces two admission policies:
 - containers must define CPU and memory requests and limits;
 - images must use an explicit tag that is not `latest`.
 
-The policy constraints exclude `kube-system`, `gatekeeper-system`, and `argocd`
-to avoid blocking cluster controllers during bootstrap.
+The policy constraints apply only to `default`, `myapp`, and `myapp-dev`.
+That keeps the demo/application workloads protected without blocking third-party
+controllers that do not expose resource settings in our GitOps repo.
 
 The `ConstraintTemplate` and `Constraint` objects use ArgoCD sync waves because
 Gatekeeper creates the custom constraint CRDs from the templates.
