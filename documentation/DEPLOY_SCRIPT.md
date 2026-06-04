@@ -45,6 +45,27 @@ point of promotion.
 
 ---
 
+## Branch automation (GitHub Actions)
+
+Two workflows in [`.github/workflows/`](../.github/workflows/) keep the
+`develop` → `main` → prod flow tidy so you rarely touch branches by hand:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `promote.yml` | push to `main` changing `values-dev.yaml` | Opens a PR copying the dev image tag into `values-production.yaml`. Merging it rolls the tag out to prod via ArgoCD (no rebuild). |
+| `sync-develop.yml` | any push to `main` | Fast-forwards `develop` up to `main` so the two stay in lockstep and the next `develop → main` PR shows a clean diff. |
+
+`sync-develop.yml` uses `git merge --ff-only` as a guard: if someone has pushed
+**directly** to `develop` since the last merge to `main`, it can't fast-forward, so
+it **fails the run** (with reconcile instructions) instead of creating a tangle —
+in that case run `git checkout develop && git merge origin/main && git push` once.
+
+> So after a PR merges to `main`, `develop` catches up automatically — no manual
+> `git merge origin/main`. (If `develop` is ever a protected branch, the Action's
+> token push may need to be allowed.)
+
+---
+
 ## What it does
 
 ```
