@@ -1,0 +1,62 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowedlatesttag
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowedLatestTag
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowedlatesttag
+
+        violation[{"msg": msg}] {
+          container := input_containers[_]
+          image := container.image
+          is_latest_or_missing_tag(image)
+          msg := sprintf("container <%v> uses image <%v>; images must use an explicit non-latest tag", [container.name, image])
+        }
+
+        input_containers[container] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+        }
+
+        input_containers[container] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.initContainers[_]
+        }
+
+        input_containers[container] {
+          workload_kinds[input.review.kind.kind]
+          container := input.review.object.spec.template.spec.containers[_]
+        }
+
+        input_containers[container] {
+          workload_kinds[input.review.kind.kind]
+          container := input.review.object.spec.template.spec.initContainers[_]
+        }
+
+        input_containers[container] {
+          input.review.kind.kind == "CronJob"
+          container := input.review.object.spec.jobTemplate.spec.template.spec.containers[_]
+        }
+
+        input_containers[container] {
+          input.review.kind.kind == "CronJob"
+          container := input.review.object.spec.jobTemplate.spec.template.spec.initContainers[_]
+        }
+
+        workload_kinds := {"Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job"}
+
+        is_latest_or_missing_tag(image) {
+          endswith(image, ":latest")
+        }
+
+        is_latest_or_missing_tag(image) {
+          not contains(last(split(image, "/")), ":")
+        }
