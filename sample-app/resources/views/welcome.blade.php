@@ -19,7 +19,6 @@
 
             * {
                 box-sizing: border-box;
-                background-color: blue;
             }
 
             html,
