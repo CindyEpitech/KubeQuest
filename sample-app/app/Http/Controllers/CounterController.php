@@ -17,9 +17,13 @@ class CounterController extends Controller
 
     public function subtract()
     {
-        $counter = new Counter();
-        $counter->count = -1;
-        $counter->save();
+        // Each "add" stores a +1 row, and the column is unsigned, so we
+        // decrement by removing one row rather than inserting a -1. The
+        // counter floors at 0 once there are no rows left to delete.
+        $row = Counter::query()->latest('id')->first();
+        if ($row) {
+            $row->delete();
+        }
         $value = Counter::sum('count');
         return response()->json(["value" => $value], 200);
     }

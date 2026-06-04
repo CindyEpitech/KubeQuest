@@ -29,7 +29,7 @@
                 align-items: center;
                 justify-content: center;
                 padding: 24px;
-                background-color: var(--bg);
+                background-color: var(--card);
                 color: var(--text);
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
                     Roboto, Helvetica, Arial, sans-serif;
@@ -38,12 +38,7 @@
 
             .card {
                 width: 100%;
-                max-width: 360px;
-                background: var(--card);
-                border: 1px solid var(--border);
-                border-radius: 12px;
-                padding: 32px;
-                box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+                max-width: 420px;
                 text-align: center;
             }
 
