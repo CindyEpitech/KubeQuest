@@ -276,7 +276,7 @@ READY=$(kubectl -n "$APP_NS" get deploy "$DEPLOY_DEPLOYMENT" -o jsonpath='{.stat
 
 echo ""
 echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}${BOLD}║  Deploy complete (via GitOps)                     ║${NC}"
+echo -e "${GREEN}${BOLD}║  Deploy complete (via GitOps)                    ║${NC}"
 echo -e "${GREEN}${BOLD}╠══════════════════════════════════════════════════╣${NC}"
 printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "Env:"      "$ENV ($ARGO_APP)"
 printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "Tag:"      "$IMAGE_TAG"
