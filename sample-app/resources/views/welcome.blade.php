@@ -10,7 +10,6 @@
             crossorigin="anonymous"></script>
         <style>
             :root {
-                --bg: #f8fafc;
                 --card: #ffffff;
                 --border: #e2e8f0;
                 --text: #0f172a;
@@ -22,13 +21,15 @@
                 box-sizing: border-box;
             }
 
+            html,
+            body {
+                height: 100%;
+            }
+
             body {
                 margin: 0;
-                min-height: 100vh;
                 display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 24px;
+                flex-direction: column;
                 background-color: var(--card);
                 color: var(--text);
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -36,48 +37,59 @@
                 -webkit-font-smoothing: antialiased;
             }
 
-            .card {
-                width: 100%;
-                max-width: 420px;
-                text-align: center;
+            .topbar {
+                display: flex;
+                align-items: baseline;
+                gap: 10px;
+                padding: 18px 32px;
+                border-bottom: 1px solid var(--border);
             }
 
-            .card__title {
-                margin: 0 0 4px;
-                font-size: 18px;
+            .topbar__title {
+                font-size: 16px;
                 font-weight: 600;
                 letter-spacing: -0.01em;
             }
 
-            .card__version {
-                margin: 0 0 28px;
-                font-size: 12px;
+            .topbar__version {
+                font-size: 13px;
                 font-weight: 500;
                 color: var(--muted);
             }
 
+            .stage {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                padding: 24px;
+            }
+
             .counter__label {
-                margin: 0 0 8px;
-                font-size: 12px;
+                margin: 0;
+                font-size: 13px;
                 font-weight: 500;
                 text-transform: uppercase;
-                letter-spacing: 0.08em;
+                letter-spacing: 0.1em;
                 color: var(--muted);
             }
 
             .counter__value {
-                margin: 0 0 28px;
-                font-size: 56px;
+                margin: 0 0 16px;
+                font-size: clamp(96px, 20vw, 200px);
                 font-weight: 700;
                 line-height: 1;
                 font-variant-numeric: tabular-nums;
-                letter-spacing: -0.02em;
+                letter-spacing: -0.03em;
             }
 
             .actions {
                 display: flex;
-                gap: 8px;
-                justify-content: center;
+                gap: 12px;
+                width: 100%;
+                max-width: 480px;
             }
 
             .btn {
@@ -86,10 +98,10 @@
                 border: 1px solid var(--border);
                 background: var(--card);
                 color: var(--text);
-                font-size: 14px;
+                font-size: 16px;
                 font-weight: 500;
-                padding: 9px 12px;
-                border-radius: 8px;
+                padding: 14px 16px;
+                border-radius: 10px;
                 cursor: pointer;
                 transition: background-color 0.12s ease, border-color 0.12s ease;
             }
@@ -109,10 +121,12 @@
         </style>
     </head>
     <body>
-        <main class="card">
-            <h1 class="card__title">KubeQuest Counter App</h1>
-            <p class="card__version">v2</p>
+        <header class="topbar">
+            <span class="topbar__title">KubeQuest App</span>
+            <span class="topbar__version">v2</span>
+        </header>
 
+        <main class="stage">
             <p class="counter__label">Counter</p>
             <p class="counter__value" id="value">{{ $value }}</p>
 
