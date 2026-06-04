@@ -2,25 +2,22 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  KubeQuest GitOps deploy
+#  KubeQuest GitOps deploy (develop)
 #
 #  This script does NOT apply anything to the cluster directly. It builds the
-#  image (dev) or promotes an existing one (prod), bumps the image tag in the
-#  right Helm values file, and pushes to Git. ArgoCD watches the repo and rolls
-#  the change out on its own — the git push IS the deploy.
+#  image on kube-1, bumps the image tag in values-dev.yaml, and pushes to
+#  `develop`. ArgoCD app `myapp-dev` watches the repo and rolls the change out
+#  into ns myapp-dev on its own — the git push IS the deploy.
 #
-#  Usage:  ./deploy.sh <dev|prod> [user] [tag]
+#  Usage:  ./deploy.sh [user] [tag]
 #
-#    ./deploy.sh dev               build develop, auto-increment tag -> myapp-dev
-#    ./deploy.sh dev cindy v0.2.0  build develop with an explicit tag
-#    ./deploy.sh prod              promote the tag currently on dev -> myapp
-#    ./deploy.sh prod cindy v0.1.9 promote a specific (already-built) tag
+#    ./deploy.sh cindy         build develop, auto-increment the tag
+#    ./deploy.sh cindy v0.2.0  build develop with an explicit tag
 #
-#  dev  → builds the image on kube-1, pushes it, bumps values-dev.yaml,
-#         pushes to `develop`. ArgoCD app `myapp-dev` syncs into ns myapp-dev.
-#  prod → does NOT rebuild. Promotes the image tag dev is already running
-#         (or an explicit tag) into values-production.yaml, pushes to `main`.
-#         ArgoCD app `myapp` syncs into ns myapp.
+#  PROD is fully automated — there is no `prod` mode here anymore. Merging
+#  develop into main fires the "Promote dev tag to production" GitHub Action,
+#  which opens a PR bumping values-production.yaml to the dev tag (main is
+#  branch-protected). Merge that PR and ArgoCD's `myapp` app rolls out prod.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Colors & helpers ────────────────────────────────────────────────────────
@@ -46,43 +43,30 @@ CINDY_SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
 OLIVIER_SSH_KEY="/Users/yolive/Documents/KubeQuest/kubequest-key-pair.pem"
 
 # ── Args ─────────────────────────────────────────────────────────────────────
-ENV="${1:-}"
-DEPLOY_USER="${2:-$USER}"
-REQUESTED_TAG="${3:-}"
+DEPLOY_USER="${1:-$USER}"
+REQUESTED_TAG="${2:-}"
 
 usage() {
   cat <<'EOF'
 
-Usage: ./deploy.sh <dev|prod> [user] [tag]
+Usage: ./deploy.sh [user] [tag]
 
-  ./deploy.sh dev               build develop, auto-increment tag -> myapp-dev
-  ./deploy.sh dev cindy v0.2.0  build develop with an explicit tag
-  ./deploy.sh prod              promote the tag currently on dev   -> myapp
-  ./deploy.sh prod cindy v0.1.9 promote a specific (already-built) tag
+  ./deploy.sh cindy         build develop, auto-increment the tag
+  ./deploy.sh cindy v0.2.0  build develop with an explicit tag
 
-  dev  builds the image on kube-1, bumps values-dev.yaml, pushes develop.
-  prod does NOT rebuild — promotes an existing tag into values-production.yaml,
-       pushes main. ArgoCD rolls out both; the git push is the deploy.
+  Builds the image on kube-1, bumps values-dev.yaml, pushes develop.
+  ArgoCD (myapp-dev) rolls it out; the git push is the deploy.
+
+  To reach prod, merge develop -> main: a GitHub Action opens a PR bumping
+  values-production.yaml to the dev tag; merge it and ArgoCD rolls out prod.
 EOF
   exit 1
 }
 
-case "$ENV" in
-  dev)
-    BRANCH="develop"
-    VALUES_FILE="$CHART_DIR/values-dev.yaml"
-    ARGO_APP="myapp-dev"; APP_NS="myapp-dev"
-    APP_URL="http://app-dev.kubequest.local"
-    DO_BUILD=true ;;
-  prod)
-    BRANCH="main"
-    VALUES_FILE="$CHART_DIR/values-production.yaml"
-    ARGO_APP="myapp"; APP_NS="myapp"
-    APP_URL="http://app.kubequest.local"
-    DO_BUILD=false ;;
-  *)
-    warn "First argument must be 'dev' or 'prod'."; usage ;;
-esac
+BRANCH="develop"
+VALUES_FILE="$CHART_DIR/values-dev.yaml"
+ARGO_APP="myapp-dev"; APP_NS="myapp-dev"
+APP_URL="http://app-dev.kubequest.local"
 
 # ── Resolve SSH key for the chosen user ──────────────────────────────────────
 USER_KEY_VAR="$(echo "$DEPLOY_USER" | tr '[:lower:]' '[:upper:]')_SSH_KEY"
@@ -91,7 +75,7 @@ set +u; SSH_KEY="${!USER_KEY_VAR}"; set -u
 [ -f "$SSH_KEY" ]     || fail "SSH key not found at $SSH_KEY"
 chmod 600 "$SSH_KEY" 2>/dev/null || true
 
-echo -e "\n${BOLD}KubeQuest deploy${NC}  env: ${BOLD}${ENV}${NC}  branch: ${BOLD}${BRANCH}${NC}  user: ${BOLD}${DEPLOY_USER}${NC}"
+echo -e "\n${BOLD}KubeQuest deploy${NC}  branch: ${BOLD}${BRANCH}${NC}  user: ${BOLD}${DEPLOY_USER}${NC}"
 
 # Run a command on kube-1
 k1() { ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@"$KUBE1_IP" "$@"; }
@@ -158,74 +142,57 @@ ok "Clone ready at $WORK"
 step "[tag] Resolving image tag..."
 EXISTING_TAGS="$(registry_tags)"
 
-if [ "$DO_BUILD" = true ]; then
-  # dev: build a brand-new image, so pick a tag that does NOT exist yet
-  if [ -n "$REQUESTED_TAG" ]; then
-    echo "$EXISTING_TAGS" | grep -qx "$REQUESTED_TAG" && fail "Tag '$REQUESTED_TAG' already exists in the registry."
-    IMAGE_TAG="$REQUESTED_TAG"
-  else
-    LATEST="$(echo "$EXISTING_TAGS" | sort -V | tail -1)"
-    if [ -z "$LATEST" ]; then
-      IMAGE_TAG="v0.1.0"
-    else
-      IMAGE_TAG="$(echo "$LATEST" | awk -F. '{print $1"."$2"."$3+1}')"
-    fi
-    ok "Latest tag in registry: ${LATEST:-<none>}"
-  fi
-  ok "New tag to build: $IMAGE_TAG"
+# Build a brand-new image, so pick a tag that does NOT exist yet.
+if [ -n "$REQUESTED_TAG" ]; then
+  echo "$EXISTING_TAGS" | grep -qx "$REQUESTED_TAG" && fail "Tag '$REQUESTED_TAG' already exists in the registry."
+  IMAGE_TAG="$REQUESTED_TAG"
 else
-  # prod: promote an image that already exists. Default = whatever dev runs.
-  if [ -n "$REQUESTED_TAG" ]; then
-    IMAGE_TAG="$REQUESTED_TAG"
+  LATEST="$(echo "$EXISTING_TAGS" | sort -V | tail -1)"
+  if [ -z "$LATEST" ]; then
+    IMAGE_TAG="v0.1.0"
   else
-    IMAGE_TAG="$(git show "origin/develop:$CHART_DIR/values-dev.yaml" \
-      | sed -n -E 's/^[[:space:]]*tag:[[:space:]]*//p' | head -1 | tr -d '"')"
-    [ -z "$IMAGE_TAG" ] && fail "Could not read the dev image tag from origin/develop:$CHART_DIR/values-dev.yaml"
-    ok "Tag currently on dev: $IMAGE_TAG"
+    IMAGE_TAG="$(echo "$LATEST" | awk -F. '{print $1"."$2"."$3+1}')"
   fi
-  echo "$EXISTING_TAGS" | grep -qx "$IMAGE_TAG" \
-    || fail "Tag '$IMAGE_TAG' is not in the registry — build it on dev first ('./deploy.sh dev')."
-  ok "Promoting existing tag: $IMAGE_TAG"
+  ok "Latest tag in registry: ${LATEST:-<none>}"
 fi
+ok "New tag to build: $IMAGE_TAG"
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  BUILD (dev only) — build & push the image on kube-1, pre-pull on all nodes
+#  BUILD — build & push the image on kube-1, pre-pull on all nodes
 # ═════════════════════════════════════════════════════════════════════════════
-if [ "$DO_BUILD" = true ]; then
-  step "[build] Building & pushing image on kube-1 (tag: $IMAGE_TAG)..."
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ec2-user@"$KUBE1_IP" bash <<REMOTE
-    set -euo pipefail
-    if ! pgrep -x buildkitd > /dev/null; then
-      echo "  Starting buildkitd..."
-      # Fully detach from the SSH channel (redirect all fds + nohup), otherwise
-      # the backgrounded daemon keeps the ssh session open and deploy.sh hangs.
-      sudo sh -c 'nohup buildkitd >/tmp/buildkitd.log 2>&1 < /dev/null &'
-      sleep 3
-    fi
-    ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
-    if [ ! -d "$REPO_DIR/.git" ]; then rm -rf "$REPO_DIR"; echo "  Cloning repo..."; git clone "$REPO_SSH" "$REPO_DIR"; fi
-    cd "$REPO_DIR"
-    git fetch origin --quiet
-    git checkout "$BRANCH"
-    git reset --hard "origin/$BRANCH"
-    cd "$REPO_DIR/sample-app"
-    echo "  Building image..."
-    sudo nerdctl build -t $REGISTRY/myapp:$IMAGE_TAG .
-    echo "  Pushing image..."
-    sudo nerdctl push --insecure-registry $REGISTRY/myapp:$IMAGE_TAG
+step "[build] Building & pushing image on kube-1 (tag: $IMAGE_TAG)..."
+ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ec2-user@"$KUBE1_IP" bash <<REMOTE
+  set -euo pipefail
+  if ! pgrep -x buildkitd > /dev/null; then
+    echo "  Starting buildkitd..."
+    # Fully detach from the SSH channel (redirect all fds + nohup), otherwise
+    # the backgrounded daemon keeps the ssh session open and deploy.sh hangs.
+    sudo sh -c 'nohup buildkitd >/tmp/buildkitd.log 2>&1 < /dev/null &'
+    sleep 3
+  fi
+  ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+  if [ ! -d "$REPO_DIR/.git" ]; then rm -rf "$REPO_DIR"; echo "  Cloning repo..."; git clone "$REPO_SSH" "$REPO_DIR"; fi
+  cd "$REPO_DIR"
+  git fetch origin --quiet
+  git checkout "$BRANCH"
+  git reset --hard "origin/$BRANCH"
+  cd "$REPO_DIR/sample-app"
+  echo "  Building image..."
+  sudo nerdctl build -t $REGISTRY/myapp:$IMAGE_TAG .
+  echo "  Pushing image..."
+  sudo nerdctl push --insecure-registry $REGISTRY/myapp:$IMAGE_TAG
 REMOTE
-  ok "Image $REGISTRY/myapp:$IMAGE_TAG pushed"
+ok "Image $REGISTRY/myapp:$IMAGE_TAG pushed"
 
-  step "[build] Pre-pulling image on all nodes..."
-  NODE_IPS=$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
-  for NODE_IP in $NODE_IPS; do
-    echo "    -> $NODE_IP"
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-      -o "ProxyCommand=ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 -W %h:%p ec2-user@$KUBE1_IP" \
-      ec2-user@"$NODE_IP" \
-      "sudo ctr -n k8s.io images pull --plain-http $REGISTRY/myapp:$IMAGE_TAG" || true
-  done
-fi
+step "[build] Pre-pulling image on all nodes..."
+NODE_IPS=$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+for NODE_IP in $NODE_IPS; do
+  echo "    -> $NODE_IP"
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+    -o "ProxyCommand=ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 -W %h:%p ec2-user@$KUBE1_IP" \
+    ec2-user@"$NODE_IP" \
+    "sudo ctr -n k8s.io images pull --plain-http $REGISTRY/myapp:$IMAGE_TAG" || true
+done
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  COMMIT THE TAG BUMP — this is the actual "deploy"
@@ -237,7 +204,7 @@ if git diff --quiet -- "$VALUES_FILE"; then
   fail "$(basename "$VALUES_FILE") is already at $IMAGE_TAG — nothing to deploy."
 fi
 git add "$VALUES_FILE"
-git commit -q -m "chore(deploy): $ENV image tag -> $IMAGE_TAG"
+git commit -q -m "chore(deploy): dev image tag -> $IMAGE_TAG"
 git push -q origin "$BRANCH"
 ok "Pushed tag bump to origin/$BRANCH"
 
@@ -278,14 +245,13 @@ echo ""
 echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}${BOLD}║  Deploy complete (via GitOps)                    ║${NC}"
 echo -e "${GREEN}${BOLD}╠══════════════════════════════════════════════════╣${NC}"
-printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "Env:"      "$ENV ($ARGO_APP)"
+printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "App:"      "$ARGO_APP"
 printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "Tag:"      "$IMAGE_TAG"
 printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "Branch:"   "$BRANCH (pushed)"
 printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "Replicas:" "${READY} ready"
 printf "${GREEN}${BOLD}║${NC}  %-10s  ${BOLD}%-35s${NC} ${GREEN}${BOLD}║${NC}\n" "URL:"      "$APP_URL"
 echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 
-if [ "$ENV" = "prod" ]; then
-  echo -e "${YELLOW}  Note: prod promoted only the image tag. If chart/template changes"
-  echo -e "  were made on develop, merge them into main as well.${NC}"
-fi
+echo -e "${YELLOW}  Next: to promote to prod, merge develop -> main. The"
+echo -e "  \"Promote dev tag to production\" Action opens a PR bumping"
+echo -e "  values-production.yaml to $IMAGE_TAG; merge it and ArgoCD rolls out prod.${NC}"
