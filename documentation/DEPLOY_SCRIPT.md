@@ -1,17 +1,47 @@
-# `deploy.sh` — Automated GitOps Deploy
+# `deploy.sh` — GitOps Deploy
 
-A single command from WSL builds, pushes, and rolls out a new version of the app.
+`deploy.sh` does **not** touch the cluster directly. It builds (dev) or promotes
+(prod) an image, bumps the image tag in the right Helm values file, and **pushes
+to Git**. ArgoCD watches the repo and rolls the change out — **the git push is the
+deploy.** The script then waits until ArgoCD reports the new tag Synced + Healthy.
 
 ```bash
-# Use current $USER, auto-increment patch from the latest tag
-./deploy.sh
+# Build the current develop branch, auto-increment the tag, ship to dev
+./deploy.sh dev
 
-# Deploy as a specific collaborator (selects their SSH key)
-./deploy.sh cindy
+# Build develop with an explicit tag
+./deploy.sh dev cindy v0.2.0
 
-# Explicit user + explicit tag
-./deploy.sh cindy v0.2.0
+# Promote the tag dev is currently running into production
+./deploy.sh prod
+
+# Promote a specific (already-built) tag into production
+./deploy.sh prod cindy v0.1.9
 ```
+
+> **Why this changed:** ArgoCD now owns rollout. The old script ran `helm upgrade`
+> directly, which fought ArgoCD's `selfHeal` (it would revert the imperative
+> change back to whatever Git said). The deploy is now "build the artifact, then
+> commit the tag." See [`concept/ARGOCD.md`](concept/ARGOCD.md) and
+> [`ARGOCD_NOTES.md`](ARGOCD_NOTES.md).
+
+---
+
+## dev vs prod
+
+| | `./deploy.sh dev` | `./deploy.sh prod` |
+|---|---|---|
+| Source branch | `develop` | `main` |
+| Builds an image? | **Yes** (on kube-1) | **No** — promotes an existing one |
+| Tag chosen | new auto-increment, or explicit (must NOT exist yet) | the tag dev runs, or explicit (must already exist) |
+| Values file bumped | `values-dev.yaml` | `values-production.yaml` |
+| Pushed to | `develop` | `main` |
+| ArgoCD app / namespace | `myapp-dev` / `myapp-dev` | `myapp` / `myapp` |
+| URL | http://app-dev.kubequest.local | http://app.kubequest.local |
+
+The normal release path: `./deploy.sh dev` → eyeball the dev URL → `./deploy.sh prod`.
+prod **reuses the exact image dev tested** (it never rebuilds), which is the whole
+point of promotion.
 
 ---
 
@@ -20,20 +50,25 @@ A single command from WSL builds, pushes, and rolls out a new version of the app
 ```
 WSL (your laptop)
   │
-  ├── Resolve kube-1 public IP via AWS CLI (tag lookup)
+  ├── Resolve kube-1 public IP via AWS CLI, point kubectl at it
   │
-  ├── (0) Query registry tags → resolve IMAGE_TAG
+  ├── Clone the repo into a scratch dir (never touches your working tree)
   │
-  ├── (1) SSH → kube-1
-  │        └── git pull → nerdctl build → nerdctl push → registry
+  ├── Resolve IMAGE_TAG
+  │     dev  → next free vX.Y.Z from the registry (or your explicit tag)
+  │     prod → the tag in develop's values-dev.yaml (or your explicit tag),
+  │            verified to exist in the registry
   │
-  ├── (2) SSH → each worker node (via kube-1 as jump host)
-  │        └── ctr pull (pre-cache image)
+  ├── dev only: SSH → kube-1 → nerdctl build + push → registry
+  │             SSH → each node (via kube-1) → ctr pull  (pre-cache)
   │
-  └── (3) helm upgrade → cluster rolls out new image
+  ├── sed the `tag:` in the values file → git commit → git push  ← the deploy
+  │
+  └── Nudge ArgoCD refresh, poll until Synced + Healthy on the new tag
 ```
 
-Four stages plus a dynamic IP-resolution step, one command. Replaces the manual workflow from `PHASE_5_APP_GITOPS.md`.
+All git work happens in a throwaway clone (`mktemp -d`, auto-removed on exit), so
+your working tree, current branch, and any uncommitted files are never disturbed.
 
 ---
 
@@ -46,14 +81,21 @@ Four stages plus a dynamic IP-resolution step, one command. Replaces the manual 
 | `<USER>_SSH_KEY` | Path to each collaborator's PEM key (e.g. `CINDY_SSH_KEY`) | Once per collaborator |
 | `REGISTRY` | Private registry address (internal IP:port) | Never (unless you move it) |
 | `REPO_SSH` | GitHub SSH clone URL | Never |
-| `REPO_DIR` | Where the repo lives on kube-1 | Never |
-| `APP_KEY` / `DB_PASSWORD` / `DB_ROOT_PASSWORD` | Helm secrets | Move to `.env` if you don't want them in git |
+| `REPO_DIR` | Where the repo lives on kube-1 (build checkout) | Never |
+| `SYNC_TIMEOUT` | Seconds to wait for ArgoCD to converge before giving up | If rollouts are slow |
 
-`KUBE1_IP` is **not configured manually** — the script looks it up from AWS at runtime using the tag above, so it survives EC2 reboots automatically.
+`KUBE1_IP` is **not configured manually** — the script looks it up from AWS at
+runtime, so it survives EC2 reboots automatically.
 
-### Per-user SSH keys
+> **No more app secrets.** The chart sets `secret.create: false` and the
+> `myapp` / `myapp-dev` secrets are pre-created in the cluster, so the script no
+> longer reads or injects `APP_KEY` / `DB_PASSWORD` / `DB_ROOT_PASSWORD`. If those
+> secrets ever get lost, recreate them from the commands in `ARGOCD_NOTES.md`.
 
-Each collaborator declares their own PEM path with a `<UPPERCASE_USERNAME>_SSH_KEY` variable at the top of `deploy.sh`. Use **absolute paths** — `$HOME` breaks if anyone runs the script under `sudo`.
+### Per-user SSH keys (EC2, not GitHub)
+
+Each collaborator declares their own PEM path with a `<UPPERCASE_USERNAME>_SSH_KEY`
+variable at the top of `deploy.sh`. Use **absolute paths** — `$HOME` breaks under `sudo`.
 
 ```bash
 CINDY_SSH_KEY="/home/cindy/projects/kubequest-key-pair.pem"
@@ -61,25 +103,30 @@ OLIVIER_SSH_KEY="/Users/yolive/Documents/KubeQuest/kubequest-key-pair.pem"
 # TEAMMATE_SSH_KEY="/home/teammate/projects/teammate-key-pair.pem"
 ```
 
-The script picks the right one based on the first argument (or `$USER` if you don't pass one). The username is case-insensitive (`cindy`, `Cindy`, and `CINDY` all resolve to `CINDY_SSH_KEY`). If your username has no matching variable, the script fails fast and tells you exactly what line to add.
+The script picks the right one from the **second** argument (or `$USER` if omitted).
+Case-insensitive (`cindy` / `Cindy` / `CINDY` all resolve to `CINDY_SSH_KEY`). The
+lookup uses `tr` (not bash 4's `${var^^}`) so it works on macOS's bash 3.2.
 
-**macOS compatibility:** the lookup uses `tr` rather than bash 4's `${var^^}` so it works on macOS's built-in bash 3.2.
+> These keys are for SSH to the **EC2 nodes**. Cloning/pushing the repo uses your
+> normal **GitHub** SSH key — make sure `git push` already works for you.
 
 **Arguments:**
 
 | Form | What it does |
 |------|--------------|
-| `./deploy.sh` | Uses `$USER` (your WSL username), auto-increments tag |
-| `./deploy.sh cindy` | Deploys as `cindy` (uses `CINDY_SSH_KEY`), auto-increments tag |
-| `./deploy.sh cindy v0.2.0` | Deploys as `cindy`, uses explicit tag (validated against the registry) |
-
-Never reuse a tag (Kubernetes caches images by tag).
+| `./deploy.sh dev` | Build develop as `$USER`, auto-increment the tag |
+| `./deploy.sh dev cindy` | Build develop as `cindy` (uses `CINDY_SSH_KEY`) |
+| `./deploy.sh dev cindy v0.2.0` | Build develop with an explicit, not-yet-existing tag |
+| `./deploy.sh prod` | Promote dev's current tag to prod |
+| `./deploy.sh prod cindy v0.1.9` | Promote a specific existing tag to prod |
 
 ---
 
 ## Prerequisites — AWS CLI setup (one-time)
 
-The script resolves kube-1's public IP via `aws ec2 describe-instances`, so the AWS CLI must be installed and configured on your WSL machine. Skip this section if `aws sts get-caller-identity` already works.
+The script resolves kube-1's public IP via `aws ec2 describe-instances`, so the AWS
+CLI must be installed and configured on your WSL machine. Skip this if
+`aws sts get-caller-identity` already works.
 
 ### 1. Install AWS CLI v2
 
@@ -94,9 +141,11 @@ aws --version          # → aws-cli/2.x.x ...
 
 ### 2. Create an IAM access key
 
-AWS Console → **IAM** → **Users** → your user → **Security credentials** → **Create access key** → choose *Command Line Interface (CLI)*. Copy both the Access Key ID and Secret Access Key before closing the page — the secret is shown only once.
+AWS Console → **IAM** → **Users** → your user → **Security credentials** →
+**Create access key** → *Command Line Interface (CLI)*. Copy both keys before
+closing — the secret is shown only once.
 
-**Minimal IAM permission needed:** `ec2:DescribeInstances`. A purpose-specific user with just that action is safer than reusing an admin key.
+**Minimal IAM permission needed:** `ec2:DescribeInstances`.
 
 ### 3. Configure the CLI
 
@@ -108,7 +157,7 @@ aws configure
 |--------|-------|
 | AWS Access Key ID | from step 2 |
 | AWS Secret Access Key | from step 2 |
-| Default region name | `eu-west-3a` |
+| Default region name | `eu-west-3` |
 | Default output format | `json` |
 
 ### 4. Verify
@@ -120,91 +169,109 @@ aws ec2 describe-instances --region eu-west-3 \
   --query "Reservations[0].Instances[0].PublicIpAddress" --output text
 ```
 
-The second command should print the kube-1 public IP. Once that works, `./deploy.sh` will resolve the IP automatically on every run.
+The second command should print the kube-1 public IP. Once that works, `deploy.sh`
+resolves the IP automatically on every run.
 
 ---
 
-## Stage 0 — Resolve image tag
+## Stage: resolve the image tag
 
-Before building, the script queries the registry (`/v2/myapp/tags/list`) through kube-1 to get the list of existing tags.
+The script queries the registry (`/v2/myapp/tags/list`) through kube-1 (the registry
+sits on a VPC-internal IP WSL can't reach directly). Only `vX.Y.Z` semver tags count.
 
-| Input | Behavior |
-|-------|----------|
-| `./deploy.sh` (no arg) | Finds the highest `vX.Y.Z` tag, bumps the patch (`v0.1.2` → `v0.1.3`). Defaults to `v0.1.0` if the registry is empty. |
-| `./deploy.sh v0.2.0` | Validates the tag isn't already in the registry. Fails with the list of existing tags if it is. |
-
-Only `vX.Y.Z` semver tags are considered when sorting. Tags like `latest` or `dev` are ignored for auto-increment.
-
-The registry is queried through kube-1 because it sits on a VPC-internal IP that WSL can't reach directly.
+| Env / input | Behavior |
+|-------------|----------|
+| `dev` (no tag) | Highest `vX.Y.Z` + patch bump (`v0.1.8` → `v0.1.9`); `v0.1.0` if empty |
+| `dev v0.2.0` | Fails if the tag **already exists** (you're about to build it) |
+| `prod` (no tag) | Reads the tag from `origin/develop:values-dev.yaml` |
+| `prod v0.1.9` | Uses that tag; fails if it is **not** in the registry yet |
 
 ---
 
-## Stage 1 — Build and push (on kube-1)
+## Stage: build & push (dev only, on kube-1)
 
 WSL opens an SSH session to kube-1 and runs a remote bash block that:
 
-1. **Starts `buildkitd`** if not running (buildkit doesn't persist across reboots).
-2. **Trusts GitHub's host key** with `ssh-keyscan` (needed on fresh EC2 instances).
-3. **Clones or pulls the repo** — checks `$REPO_DIR/.git` to decide. If the directory exists but isn't a valid git repo (e.g. failed clone), it wipes it and re-clones.
-4. **Builds the image** with `nerdctl build` from `sample-app/`.
-5. **Pushes to the private registry** with `--insecure-registry` (registry is plain HTTP).
-6. **Verifies** by hitting `/v2/myapp/tags/list`.
+1. **Starts `buildkitd`** if not running (doesn't persist across reboots).
+2. **Trusts GitHub's host key** with `ssh-keyscan`.
+3. **Clones or hard-resets** the repo to `origin/develop` (so it builds exactly
+   what's pushed — commit & push your app code first).
+4. **Builds** with `nerdctl build` from `sample-app/`.
+5. **Pushes** to the private registry with `--insecure-registry` (plain HTTP).
 
-> Why build on kube-1? `nerdctl` and `buildkitd` are installed there, and it sits on the same VPC as the registry. WSL can't push to the registry directly.
+> Why build on kube-1? `nerdctl`/`buildkitd` live there and it's on the same VPC as
+> the registry. WSL can't push to the registry directly. prod skips this entirely.
 
 ---
 
-## Stage 2 — Pre-pull on all worker nodes
+## Stage: pre-pull on all worker nodes (dev only)
 
-The cluster's containerd doesn't reliably honor the `hosts.toml` insecure-registry config for kubelet-initiated pulls — kubelet keeps trying HTTPS and hitting `http: server gave HTTP response to HTTPS client`.
-
-**Workaround:** before triggering the rollout, manually pull the image on every node so the kubelet finds it cached locally and skips the network pull.
-
-Mechanics:
-
-1. WSL runs `kubectl get nodes -o jsonpath='...InternalIP...'` to get every node's private IP.
-2. For each node, WSL opens an SSH session **using kube-1 as a jump host** (`ProxyCommand`). This is needed because worker nodes only have private IPs that aren't reachable from outside the VPC.
-3. The remote command is `sudo ctr -n k8s.io images pull --plain-http ...` — `ctr` bypasses the CRI and pulls directly into the kubelet's containerd namespace.
+Kubelet doesn't reliably honor the insecure-registry config for its own pulls, so
+the script pre-pulls the image on every node first. It SSHes to each node **using
+kube-1 as a jump host** (`ProxyCommand`, since workers only have private IPs) and
+runs `sudo ctr -n k8s.io images pull --plain-http ...`.
 
 ```bash
 WSL ──(PEM key)──→ kube-1 (jump) ──→ worker (private IP)
 ```
 
-WSL holds the key for both hops — kube-1 never needs to know about the worker SSH keys.
-
-`|| true` after each pull ensures one failing node doesn't abort the whole deploy.
+`|| true` after each pull means one unreachable node doesn't abort the deploy.
 
 ---
 
-## Stage 3 — Helm upgrade
+## Stage: commit the tag bump (the actual deploy)
 
-A standard `helm upgrade myapp ./infra-gitops/charts/myapp` with:
+In the scratch clone, the script `sed`s the `tag:` line of the values file to the
+new tag, commits `chore(deploy): <env> image tag -> <tag>`, and pushes the branch.
+If the file is already at that tag it stops (nothing to deploy).
 
-- Image repository and tag set from the script variables
-- Secrets injected via `--set`
-- `mysql.enabled=false` because the MySQL Deployment is managed by the chart's `mysql.yaml`, not the Bitnami subchart
-- `--wait --timeout 5m` so the command blocks until the rollout completes (or fails)
-
-If `--wait` times out, Helm marks the release as failed. You can roll back with `helm rollback myapp -n myapp`.
+That push is the only thing that changes the cluster — from here ArgoCD takes over.
 
 ---
 
-## Final verification
+## Stage: wait for ArgoCD
+
+The script annotates the Application with `argocd.argoproj.io/refresh=normal` to
+trigger an immediate sync (instead of waiting up to ~3 min for the next poll), then
+loops until **all three** are true (or `SYNC_TIMEOUT` is hit):
+
+- Application `status.sync.status == Synced`
+- Application `status.health.status == Healthy`
+- the live Deployment's image actually contains the new tag
+
+You can watch the same thing by hand:
 
 ```bash
-kubectl rollout status deployment/myapp-myapp -n myapp
-kubectl get pods -n myapp -o wide
+kubectl -n argocd get app myapp-dev          # or myapp
+kubectl -n myapp-dev get deploy myapp-myapp -o jsonpath='{..image}'; echo
 ```
 
-If the rollout finished successfully, the new version is live.
+---
+
+## Rollback (GitOps)
+
+Rollback is also a Git operation now — **don't** use `helm rollback` or
+`kubectl rollout undo`, ArgoCD's `selfHeal` would just revert you. Instead, point
+the tag back to a known-good value and push:
+
+```bash
+# Quickest: re-promote / re-deploy an older tag
+./deploy.sh dev  cindy v0.1.7      # dev
+./deploy.sh prod cindy v0.1.7      # prod
+
+# Or revert the bump commit
+git revert <deploy-commit> && git push     # ArgoCD syncs back
+```
+
+ArgoCD also keeps history — you can roll back from the ArgoCD UI (App → History
+and rollback) or `argocd app rollback`.
 
 ---
 
 ## After a kube-1 reboot
 
-The EC2 public IP changes, but **`deploy.sh` no longer needs a manual update** — it resolves the fresh IP from AWS at the start of every run.
-
-You still need to refresh your local kubeconfig so `kubectl` can reach the API server on the new IP:
+The EC2 public IP changes, but `deploy.sh` resolves the fresh IP from AWS on every
+run. You still need to refresh your local kubeconfig so `kubectl` reaches the API:
 
 ```bash
 NEW_IP=$(aws ec2 describe-instances --region eu-west-3 \
@@ -214,25 +281,7 @@ sed -i "s|https://.*:6443|https://$NEW_IP:6443|" ~/.kube/config
 kubectl get nodes
 ```
 
-`buildkitd` is auto-started by the script. The registry container restarts automatically.
-
----
-
-## Rollback
-
-If something goes wrong:
-
-```bash
-# Helm-managed rollback (preferred)
-helm rollback myapp -n myapp
-
-# Or roll back to a specific revision
-helm history myapp -n myapp
-helm rollback myapp 12 -n myapp
-
-# Bypass Helm entirely
-kubectl rollout undo deployment/myapp-myapp -n myapp
-```
+`buildkitd` is auto-started by the script; the registry container restarts automatically.
 
 ---
 
@@ -240,18 +289,18 @@ kubectl rollout undo deployment/myapp-myapp -n myapp
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `tag '...' already exists in the registry` | You passed a tag that's already in the registry | Use a higher tag, or omit the argument to auto-increment |
-| `No SSH key configured for user '<name>'` | Your username has no `<UPPERCASE>_SSH_KEY` variable | Add the line the script suggests at the top of `deploy.sh` |
-| `SSH key not found at <path>` | Variable is set but the file doesn't exist | Fix the path, or move/rename the `.pem` to match |
-| `Could not resolve a running instance tagged Name=kube-1` | AWS CLI not configured, wrong region, or kube-1 stopped | Run `aws sts get-caller-identity` to check creds; verify `AWS_REGION`; confirm the instance is running |
-| `aws: command not found` | AWS CLI v2 not installed on WSL | See [Prerequisites — AWS CLI setup](#prerequisites--aws-cli-setup-one-time) |
-| `Permission denied (publickey)` on stage 1 | PEM key path wrong or permissions too open | `chmod 600` the key; update `SSH_KEY` |
-| `Host key verification failed` cloning the repo | Fresh kube-1, no GitHub host key | Already handled by `ssh-keyscan` in the script |
-| `destination path '~/KubeQuest' already exists` | Previous clone failed mid-way | Already handled — script wipes incomplete clones |
-| `Chart.yaml file is missing` | File is named `Charts.yaml` (with `s`) | Rename to `Chart.yaml` |
-| `ImagePullBackOff` after deploy | Pre-pull didn't reach that node | Check `kubectl describe pod`; manually `ctr pull` on the failing node |
-| `context deadline exceeded` on helm upgrade | Pods aren't becoming ready in 5min | Drop `--wait` and inspect with `kubectl describe pod` |
-| `bad character U+003E '>'` in template | Helm template file got truncated (line cut off) | Open the template file and complete the truncated line |
+| `First argument must be 'dev' or 'prod'` | Missing/!valid env arg | Run `./deploy.sh dev` or `./deploy.sh prod` |
+| `Tag '...' already exists in the registry` (dev) | You passed a tag that's already built | Use a higher tag, or omit it to auto-increment |
+| `Tag '...' is not in the registry` (prod) | Promoting a tag dev never built | Run `./deploy.sh dev` first, then promote |
+| `... is already at <tag> — nothing to deploy` | Values file already points there | Nothing to do, or pick a different tag |
+| `Timed out after <N>s` waiting for ArgoCD | Rollout slow/failing, or auto-sync off | `kubectl -n argocd get app <app>`; `kubectl describe pod` |
+| `No SSH key configured for user '<name>'` | No `<UPPERCASE>_SSH_KEY` variable | Add the line at the top of `deploy.sh` |
+| `SSH key not found at <path>` | Variable set but file missing | Fix the path / move the `.pem` |
+| `No running instance tagged Name=kube-1` | AWS not configured, wrong region, or kube-1 stopped | `aws sts get-caller-identity`; check `AWS_REGION`; start the instance |
+| `aws: command not found` | AWS CLI v2 not installed | See [Prerequisites](#prerequisites--aws-cli-setup-one-time) |
+| `Permission denied (publickey)` on build | EC2 PEM path/permissions wrong | `chmod 600` the key; fix `<USER>_SSH_KEY` |
+| `Permission denied (publickey)` on clone/push | Your **GitHub** SSH isn't set up | Confirm `git push` works outside the script |
+| `ImagePullBackOff` after deploy | Pre-pull missed a node | `kubectl describe pod`; manually `ctr pull` on that node |
 
 ---
 
@@ -263,4 +312,5 @@ kubectl rollout undo deployment/myapp-myapp -n myapp
 | Bug fix | `v0.1.1` |
 | Feature | `v0.2.0` |
 
-Never reuse a tag. Kubernetes caches images by tag — a reused tag means stale images on some nodes with no error.
+Never reuse a tag. Kubernetes caches images by tag — a reused tag means stale images
+on some nodes with no error.
