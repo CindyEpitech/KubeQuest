@@ -1,0 +1,42 @@
+{{- if and .Values.networkPolicy.enabled (not .Values.mysql.enabled) }}
+# Reinforce network access (bonus): lock down the database.
+#
+# Default-deny ALL ingress to the MySQL pod, then allow only the two clients
+# that legitimately need 3306:
+#   - the web app pods  (their wait-for-mysql init container + Laravel itself)
+#   - the db-backup CronJob pods  (mysqldump)
+# Any other pod — in this namespace or another — is denied. All three workloads
+# live in this namespace, so this is plain pod-to-pod traffic that Calico
+# enforces directly (no hostNetwork / node-IP complications like the ingress
+# path has).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "myapp.fullname" . }}-mysql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  # Target: the MySQL pod (mysql.yaml gives it the bare label `app: mysql`).
+  podSelector:
+    matchLabels:
+      app: mysql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # The web Deployment pods (name + instance).
+        - podSelector:
+            matchLabels:
+              {{- include "myapp.selectorLabels" . | nindent 14 }}
+        # The backup CronJob pods (name + component, no instance — see
+        # cronjob-backup.yaml for why).
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "myapp.name" . }}
+              app.kubernetes.io/component: db-backup
+      ports:
+        - protocol: TCP
+          port: 3306
+{{- end }}

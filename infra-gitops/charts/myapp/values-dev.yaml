@@ -3,7 +3,7 @@
 # standalone MySQL (mysql.enabled=false => the chart ships its own MySQL).
 image:
   repository: 10.0.9.227:5000/myapp
-  tag: v0.1.32
+  tag: v0.1.33
 
 # Secrets are pre-created in the myapp-dev namespace (not managed by GitOps).
 secret:
@@ -27,6 +27,18 @@ autoscaling:
 # Separate hostname so dev doesn't collide with prod's app.kubequest.local.
 ingress:
   host: app-dev.kubequest.local
+  # TLS on app-dev.kubequest.local via cert-manager's CA issuer (bonus).
+  tls:
+    enabled: true
+
+# Lock down MySQL to the app + backup pods only (bonus). Validated here on dev
+# first; flip values-production once confirmed healthy.
+networkPolicy:
+  enabled: true
+
+# Least-privilege operator SA scoped to myapp-dev (bonus). Additive, so on.
+rbac:
+  create: true
 
 config:
   appEnv: dev

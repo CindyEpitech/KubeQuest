@@ -10,3 +10,5 @@ resources:
   - ../../base/kube-prometheus
   - ../../base/loki
   - ../../base/gatekeeper
+  - ../../base/cert-manager
+  - ../../base/rbac

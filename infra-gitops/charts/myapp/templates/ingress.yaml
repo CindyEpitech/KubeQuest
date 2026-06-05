@@ -1,12 +1,27 @@
 {{- if .Values.ingress.enabled }}
+{{- $tlsSecret := .Values.ingress.tls.secretName | default (printf "%s-tls" (include "myapp.fullname" .)) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "myapp.fullname" . }}
   labels:
     {{- include "myapp.labels" . | nindent 4 }}
+  {{- if .Values.ingress.tls.enabled }}
+  annotations:
+    # cert-manager (ingress-shim) issues the cert from the cluster CA issuer and
+    # writes it to the TLS secret below. ssl-redirect stays off so plain HTTP and
+    # the load-test / demo probers keep working alongside HTTPS.
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.clusterIssuer | quote }}
+    nginx.ingress.kubernetes.io/ssl-redirect: {{ .Values.ingress.tls.sslRedirect | quote }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ $tlsSecret }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.host }}
       http:
