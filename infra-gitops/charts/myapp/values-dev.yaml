@@ -31,6 +31,11 @@ ingress:
   tls:
     enabled: true
 
+# Lock down MySQL to the app + backup pods only (bonus). Validated here on dev
+# first; flip values-production once confirmed healthy.
+networkPolicy:
+  enabled: true
+
 config:
   appEnv: dev
   appDebug: "true"

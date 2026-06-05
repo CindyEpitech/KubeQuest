@@ -30,6 +30,12 @@ ingress:
     sslRedirect: false
     secretName: ""        # defaults to <release>-myapp-tls
 
+# ── Network policy (bonus: restrict who can reach MySQL) ──────
+# Default-deny ingress to MySQL, allowing only the app + backup pods on 3306.
+# Off by default; enable per-environment after confirming the app stays healthy.
+networkPolicy:
+  enabled: false
+
 # ── Resources (required by OPA policy) ───────────────────────
 resources:
   requests:

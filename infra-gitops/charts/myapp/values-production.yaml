@@ -17,3 +17,8 @@ mysql:
 ingress:
   tls:
     enabled: true
+
+# MySQL NetworkPolicy (bonus). Leave off until it's been validated on dev
+# (myapp-dev); flip to true once the dev app is confirmed healthy with it on.
+networkPolicy:
+  enabled: false
