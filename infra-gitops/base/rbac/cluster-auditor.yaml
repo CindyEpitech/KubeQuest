@@ -1,0 +1,68 @@
+# Define orchestrator access permissions (bonus) — a cluster-wide, read-only
+# "auditor" identity, the opposite end of the spectrum from the dashboard's
+# cluster-admin. It can inspect almost everything but CANNOT read secrets and
+# cannot mutate anything. Hand this token to someone who needs to look, not touch.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: access-control
+  labels:
+    app.kubernetes.io/part-of: kubequest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-auditor
+  namespace: access-control
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubequest:cluster-auditor
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - namespaces
+      - nodes
+      - events
+      - serviceaccounts
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list, watch]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+    verbs: [get, list, watch]
+  # Allow `kubectl top` for capacity checks.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: [pods, nodes]
+    verbs: [get, list]
+  # NOTE: `secrets` is deliberately NOT listed. A read-only auditor must never
+  # be able to read credentials — that is the whole point of least privilege.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubequest:cluster-auditor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubequest:cluster-auditor
+subjects:
+  - kind: ServiceAccount
+    name: cluster-auditor
+    namespace: access-control

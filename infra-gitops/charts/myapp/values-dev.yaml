@@ -36,6 +36,10 @@ ingress:
 networkPolicy:
   enabled: true
 
+# Least-privilege operator SA scoped to myapp-dev (bonus). Additive, so on.
+rbac:
+  create: true
+
 config:
   appEnv: dev
   appDebug: "true"

@@ -36,6 +36,12 @@ ingress:
 networkPolicy:
   enabled: false
 
+# ── RBAC (bonus: least-privilege operator SA for this namespace) ──
+# Creates a namespaced operator ServiceAccount/Role/RoleBinding. Additive (grants
+# a new scoped identity; restricts no one), so safe to enable everywhere.
+rbac:
+  create: false
+
 # ── Resources (required by OPA policy) ───────────────────────
 resources:
   requests:

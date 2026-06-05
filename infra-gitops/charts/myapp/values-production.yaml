@@ -22,3 +22,7 @@ ingress:
 # (myapp-dev); flip to true once the dev app is confirmed healthy with it on.
 networkPolicy:
   enabled: false
+
+# Least-privilege operator SA scoped to the myapp namespace (bonus). Additive.
+rbac:
+  create: true

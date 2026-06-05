@@ -1,0 +1,62 @@
+{{- if .Values.rbac.create }}
+# Least-privilege operator identity for THIS namespace only (bonus).
+# A human/CI credential that can manage the app's own workloads but has no
+# reach into other namespaces or cluster-scoped resources. It is NOT the
+# identity the app pods run as (they keep the default SA) — it's a separate,
+# scoped admin credential.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "myapp.fullname" . }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "myapp.fullname" . }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Inspect/debug running pods.
+  - apiGroups: [""]
+    resources: [pods/log, pods/exec]
+    verbs: [get, list, create]
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses]
+    verbs: [get, list, watch, update, patch]
+  # May reference secrets but not delete them — read-only on credentials.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "myapp.fullname" . }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "myapp.fullname" . }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "myapp.fullname" . }}-operator
+    namespace: {{ .Release.Namespace }}
+{{- end }}
