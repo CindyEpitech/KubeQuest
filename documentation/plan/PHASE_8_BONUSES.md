@@ -8,6 +8,63 @@
 Bonus features to maximize the demo impact and score.
 Tackle these in priority order after the core phases are complete and tested.
 
+> The sections below are the original planning notes (generic examples — Postgres,
+> ECR, Let's Encrypt). For **what was actually implemented and how to demo it**,
+> see the runbook immediately below; it is the source of truth.
+
+---
+
+## Demonstrating the bonuses (defense runbook)
+
+What's implemented, and the exact way to show each on the live cluster. Two
+narrated, `[Enter]`-paced scripts do most of it:
+
+```bash
+./scripts/demo-bonuses.sh      # ArgoCD, registry, lightweight image, TLS, NetPol, RBAC
+./scripts/demo-rollback.sh     # zero-downtime + automatic rollback
+```
+
+> Prep: cert-manager is installed via **helm, not GitOps** — on a fresh cluster
+> run the install in [`infra-gitops/base/cert-manager/README.md`](../../infra-gitops/base/cert-manager/README.md)
+> first (pinned v1.14.7 + webhook hostNetwork — see that README for why).
+
+| # | Bonus | Implemented as | Show it with |
+|---|-------|----------------|--------------|
+| 1 | **ArgoCD** | `infra` / `myapp` / `myapp-dev` Applications | `kubectl -n argocd get applications` + the UI |
+| 2 | **Zero-downtime + auto-rollback** | `maxUnavailable:0` + ArgoCD selfHeal | `./scripts/demo-rollback.sh` |
+| 3 | **Private registry** | `registry:2` on kube-1 (`10.0.9.227:5000`) | image ref on the deploy; `curl …/v2/_catalog` on kube-1 |
+| 4 | **Lightweight image** | multi-stage `sample-app/Dockerfile` + `.dockerignore` | the `FROM … AS` stages; `nerdctl images` size on kube-1 |
+| 5 | **cert-manager TLS** | self-signed CA `ClusterIssuer` + chart `ingress.tls` | `kubectl get clusterissuer`; `openssl s_client` shows our CA |
+| 6 | **MySQL NetworkPolicy** | chart `networkpolicy.yaml` (Calico-enforced) | rogue pod → `Connection timed out` |
+| 7 | **RBAC** | `base/rbac` auditor + chart operator | `kubectl auth can-i … --as=<sa>` |
+
+Key per-bonus commands (the scripts run these for you):
+
+```bash
+# 3 — private registry (the image comes from our registry, not Docker Hub)
+kubectl -n myapp get deploy myapp-myapp \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="myapp")].image}'
+
+# 5 — TLS leaf is issued by our in-cluster CA
+echo | openssl s_client -connect <ingress-ip>:443 -servername app.kubequest.local 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -ext subjectAltName
+
+# 6 — MySQL only reachable by app/backup pods (rogue pod is blocked)
+kubectl -n myapp-dev run rogue --rm -i --restart=Never --image=busybox:1.36 \
+  --overrides='{"spec":{"containers":[{"name":"rogue","image":"busybox:1.36","command":["nc","-zvw3","myapp-mysql","3306"],"resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"50m","memory":"32Mi"}}}]}}'
+
+# 7 — read-only auditor cannot read secrets or mutate
+SA=system:serviceaccount:access-control:cluster-auditor
+kubectl auth can-i list pods -A --as=$SA      # yes
+kubectl auth can-i get secrets -A --as=$SA    # no
+```
+
+**How this differs from the generic plan below:** the CA is self-signed (private
+`.local`, not Let's Encrypt); the DB is MySQL (not Postgres) and its policy is
+scoped to the DB to avoid the hostNetwork-ingress gotcha; the registry is the
+local `registry:2` on kube-1 (not ECR); and **RBAC** (auditor + namespaced
+operator) was added on top.
+
 ---
 
 ## Bonus 1 — ArgoCD (GitOps Automation)
@@ -391,9 +448,12 @@ Add per-namespace access control to Prometheus metrics.
 - [ ] Phase 7 — All defense scripts tested
 
 ### Bonuses
-- [ ] ArgoCD — automatic GitOps sync
-- [ ] cert-manager — TLS on all routes
-- [ ] Zero-downtime — readiness probes + rolling strategy
-- [ ] Private registry — ECR + imagePullSecrets
-- [ ] Network policies — restrict pod-to-pod traffic
-- [ ] kube-rbac-proxy — multi-tenant observability
+- [x] ArgoCD — automatic GitOps sync (`infra` / `myapp` / `myapp-dev`)
+- [x] cert-manager — TLS via self-signed in-cluster CA (app route)
+- [x] Zero-downtime — `maxUnavailable:0` + readiness probes (proven by demo-rollback.sh)
+- [x] Private registry — `registry:2` on kube-1 (`10.0.9.227:5000`)
+- [x] Lightweight image — multi-stage Dockerfile + `.dockerignore`
+- [x] Network policy — MySQL locked to app + backup pods (Calico)
+- [x] RBAC — least-privilege auditor + per-namespace operator
+- [ ] kube-rbac-proxy — multi-tenant observability (not done)
+- [ ] TLS on Grafana/Prometheus/Dashboard (needs oauth2 signin URLs reworked to https first)
