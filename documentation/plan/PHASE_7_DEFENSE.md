@@ -233,6 +233,12 @@ Demonstrates the two safety nets baked into the app deployment, live:
 > but paced with `[Enter]` and with an on-screen uptime counter that turns the
 > zero-downtime claim into a hard number (`N/N requests OK, 0 failed`).
 > `break-deployment.sh` is the non-interactive equivalent (CI / quick check).
+>
+> The uptime prober picks the best reachable path automatically: the real
+> external URL if `/etc/hosts` points at the ingress node, else a port-forward to
+> the **nginx ingress controller** with a `Host:` header (still the real
+> nginx → Ingress → Service path), else a direct port-forward to the Service.
+> So the counter works even with no `/etc/hosts` entry or a ClusterIP-only ingress.
 
 ```bash
 ./scripts/break-deployment.sh                      # myapp / prod (default, HA)

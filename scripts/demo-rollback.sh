@@ -55,28 +55,52 @@ HEAL_TIMEOUT=180
 
 PROBE_LOG="$(mktemp)"; PROBE_PID=""; PF_PID=""
 PROBE_URL="$APP_URL/"          # resolved by setup_probe (external, else port-forward)
+HOST_HEADER=""                 # set when we tunnel through the ingress controller
 PF_PORT=18080
+INGRESS_NS="ingress-nginx"; INGRESS_SVC="ingress-nginx-controller"
+APP_HOST="${APP_URL#http://}"; APP_HOST="${APP_HOST%/}"   # app[-dev].kubequest.local
+
 # curl already prints "000" on failure via -w, so don't append our own fallback
 # (that produced "000000"); just default to 000 if curl writes nothing at all.
-http_code() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$1" 2>/dev/null); echo "${c:-000}"; }
+# When HOST_HEADER is set we send it so nginx routes to the app's Ingress rule.
+http_code() {
+  local c
+  if [ -n "$HOST_HEADER" ]; then
+    c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H "Host: $HOST_HEADER" "$1" 2>/dev/null)
+  else
+    c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$1" 2>/dev/null)
+  fi
+  echo "${c:-000}"
+}
 
-# Decide what the prober hits. Prefer the real external ingress URL; if it isn't
-# reachable from this machine (no /etc/hosts entry, ClusterIP-only ingress, WSL),
-# fall back to a port-forward straight to the Service so the uptime counter still
-# works. Sets PROBE_URL; returns non-zero if neither path answers.
+# Decide what the prober hits, preferring paths that exercise the real ingress:
+#   1. the external ingress URL (if /etc/hosts points at the ingress node)
+#   2. a port-forward to the nginx ingress controller + Host header — still the
+#      real nginx -> Ingress -> Service path, just tunneled (no /etc/hosts needed)
+#   3. last resort: a port-forward straight to the app Service (bypasses nginx)
+# Sets PROBE_URL (+ HOST_HEADER); returns non-zero if nothing answers.
 setup_probe() {
   if [ "$(http_code "$APP_URL/")" = "200" ]; then
-    PROBE_URL="$APP_URL/"; ok "Probing the real ingress URL: $APP_URL"; return 0
+    PROBE_URL="$APP_URL/"; HOST_HEADER=""; ok "Probing the real ingress URL: $APP_URL"; return 0
   fi
-  warn "$APP_URL not reachable from here — port-forwarding svc/$DEPLOY instead"
+  if kubectl -n "$INGRESS_NS" get svc "$INGRESS_SVC" >/dev/null 2>&1; then
+    warn "$APP_URL not reachable — port-forwarding the nginx ingress controller"
+    kubectl -n "$INGRESS_NS" port-forward "svc/$INGRESS_SVC" "$PF_PORT:80" >/dev/null 2>&1 &
+    PF_PID=$!; sleep 2
+    PROBE_URL="http://127.0.0.1:$PF_PORT/"; HOST_HEADER="$APP_HOST"
+    if [ "$(http_code "$PROBE_URL")" = "200" ]; then
+      ok "Probing via nginx: 127.0.0.1:$PF_PORT  Host: $APP_HOST  (real ingress path)"; return 0
+    fi
+    warn "Ingress-controller probe didn't answer — falling back to the Service"
+    [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null; PF_PID=""; HOST_HEADER=""; sleep 1
+  fi
   kubectl -n "$APP_NS" port-forward "svc/$DEPLOY" "$PF_PORT:80" >/dev/null 2>&1 &
-  PF_PID=$!
-  sleep 2
-  PROBE_URL="http://127.0.0.1:$PF_PORT/"
+  PF_PID=$!; sleep 2
+  PROBE_URL="http://127.0.0.1:$PF_PORT/"; HOST_HEADER=""
   if [ "$(http_code "$PROBE_URL")" = "200" ]; then
-    ok "Probing via port-forward: 127.0.0.1:$PF_PORT -> svc/$DEPLOY:80"; return 0
+    ok "Probing via port-forward to svc/$DEPLOY:80 (bypasses nginx)"; return 0
   fi
-  warn "Port-forward probe also failed — the uptime counter will have no data"; return 1
+  warn "All probe paths failed — the uptime counter will have no data"; return 1
 }
 
 # Background uptime prober — one request/second appended to $PROBE_LOG.
