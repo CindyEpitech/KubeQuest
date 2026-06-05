@@ -1,0 +1,58 @@
+# Self-signed CA chain for *.kubequest.local.
+#
+# Let's Encrypt can't validate a private .local domain, so we run our own tiny
+# CA through cert-manager instead. The chain is:
+#
+#   selfsigned-bootstrap (ClusterIssuer)
+#        └─ signs ─> kubequest-ca (Certificate, isCA, stored as a Secret)
+#                         └─ used by ─> kubequest-ca (ClusterIssuer)
+#                                            └─ signs ─> per-host leaf certs
+#                                                        (via ingress-shim)
+#
+# Requires cert-manager to be installed first (it provides these CRDs and the
+# controller). See README.md for the one-line helm install. Sync waves keep the
+# ordering deterministic when ArgoCD applies them.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  selfSigned: {}
+---
+# The root CA certificate. cert-manager reads/writes cluster-scoped issuer
+# secrets in its own namespace (--cluster-resource-namespace, default
+# "cert-manager"), so the CA Secret must live there.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kubequest-ca
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  isCA: true
+  commonName: KubeQuest Local Root CA
+  secretName: kubequest-ca-tls
+  duration: 87600h     # 10 years — this CA outlives the cluster
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# The CA issuer that signs the actual per-host leaf certificates. Reference it
+# from any Ingress with: cert-manager.io/cluster-issuer: kubequest-ca
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: kubequest-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  ca:
+    secretName: kubequest-ca-tls

@@ -12,3 +12,8 @@ secret:
 # MySQL is managed outside this release.
 mysql:
   enabled: false
+
+# TLS on app.kubequest.local via cert-manager's CA issuer (bonus).
+ingress:
+  tls:
+    enabled: true

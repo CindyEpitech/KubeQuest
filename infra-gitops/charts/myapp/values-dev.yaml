@@ -27,6 +27,9 @@ autoscaling:
 # Separate hostname so dev doesn't collide with prod's app.kubequest.local.
 ingress:
   host: app-dev.kubequest.local
+  # TLS on app-dev.kubequest.local via cert-manager's CA issuer (bonus).
+  tls:
+    enabled: true
 
 config:
   appEnv: dev

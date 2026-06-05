@@ -21,6 +21,14 @@ ingress:
   host: app.kubequest.local
   path: /
   pathType: Prefix
+  # TLS via cert-manager's self-signed CA (see base/cert-manager). Off by
+  # default; the dev/prod values turn it on. sslRedirect stays false so HTTP
+  # keeps working next to HTTPS (load-test / demo probers hit plain HTTP).
+  tls:
+    enabled: false
+    clusterIssuer: kubequest-ca
+    sslRedirect: false
+    secretName: ""        # defaults to <release>-myapp-tls
 
 # ── Resources (required by OPA policy) ───────────────────────
 resources:
