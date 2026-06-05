@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubequest-certificates-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  certificates-dashboard.json: |
+    {
+      "annotations": { "list": [] },
+      "description": "KubeQuest certificates (cert-manager): expiry countdown, ready status, renewal health",
+      "editable": true,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Certificates Not Ready",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "count(certmanager_certificate_ready_status{condition=\"True\"} == 0) or vector(0)",
+              "legendFormat": "not ready",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Soonest Expiry (days)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "d",
+              "decimals": 1,
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 14 }, { "color": "green", "value": 30 }] }
+            },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "min((certmanager_certificate_expiration_timestamp_seconds - time()) / 86400)",
+              "legendFormat": "soonest",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Certificates Total",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+          "fieldConfig": {
+            "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "count(certmanager_certificate_expiration_timestamp_seconds)",
+              "legendFormat": "total",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "ACME Order Errors (last 1 h)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background", "graphMode": "none" },
+          "targets": [
+            {
+              "expr": "sum(increase(certmanager_http_acme_client_request_count{status!~\"2..\"}[1h])) or vector(0)",
+              "legendFormat": "errors",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "table",
+          "title": "Certificate Expiry",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 5 },
+          "fieldConfig": {
+            "defaults": { "unit": "d", "decimals": 1 },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "name" }, "properties": [{ "id": "custom.width", "value": 280 }] },
+              { "matcher": { "id": "byName", "options": "namespace" }, "properties": [{ "id": "custom.width", "value": 160 }] },
+              {
+                "matcher": { "id": "byName", "options": "days_left" },
+                "properties": [
+                  { "id": "custom.displayMode", "value": "color-background" },
+                  { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 14 }, { "color": "green", "value": 30 }] } }
+                ]
+              }
+            ]
+          },
+          "options": { "sortBy": [{ "displayName": "days_left", "desc": false }], "footer": {} },
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "container": true, "endpoint": true, "instance": true, "job": true, "pod": true, "service": true },
+                "renameByName": { "Value": "days_left" }
+              }
+            }
+          ],
+          "targets": [
+            {
+              "expr": "(certmanager_certificate_expiration_timestamp_seconds - time()) / 86400",
+              "refId": "A",
+              "instant": true,
+              "format": "table"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Days to Expiry (trend)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "d",
+              "custom": { "lineWidth": 2 },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 14 }, { "color": "red", "value": 7 }] }
+            },
+            "overrides": []
+          },
+          "options": { "tooltip": { "mode": "multi", "sort": "asc" } },
+          "targets": [
+            {
+              "expr": "(certmanager_certificate_expiration_timestamp_seconds - time()) / 86400",
+              "legendFormat": "{{ namespace }}/{{ name }}",
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "refresh": "1m",
+      "schemaVersion": 38,
+      "tags": ["kubequest", "custom", "certificates"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "label": "Datasource",
+            "multi": false,
+            "name": "datasource",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "type": "datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-7d", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "KubeQuest — Certificates",
+      "uid": "kubequest-certificates",
+      "version": 1
+    }

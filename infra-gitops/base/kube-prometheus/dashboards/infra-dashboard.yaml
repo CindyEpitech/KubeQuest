@@ -139,7 +139,7 @@ data:
       ],
       "refresh": "30s",
       "schemaVersion": 38,
-      "tags": ["kubequest", "infra"],
+      "tags": ["kubequest", "custom", "infra"],
       "templating": {
         "list": [
           {

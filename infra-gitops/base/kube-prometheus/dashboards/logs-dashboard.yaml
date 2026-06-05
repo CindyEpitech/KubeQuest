@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubequest-logs-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  logs-dashboard.json: |
+    {
+      "annotations": { "list": [] },
+      "description": "KubeQuest logs (Loki): log volume per namespace, error/warn rate, live tail",
+      "editable": true,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Log Volume per Namespace (lines/s)",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "fieldConfig": {
+            "defaults": { "unit": "logs", "custom": { "lineWidth": 2, "fillOpacity": 10, "stacking": { "mode": "normal" } } },
+            "overrides": []
+          },
+          "options": { "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum(rate({namespace=~\".+\"}[2m])) by (namespace)",
+              "legendFormat": "{{ namespace }}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Error / Warn Rate (lines/s)",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": {
+            "defaults": { "unit": "logs", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+              { "matcher": { "id": "byName", "options": "warn" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum(rate({namespace=~\"$namespace\"} |~ \"(?i)\\\\b(error|err|fatal|panic|exception)\\\\b\" [2m]))",
+              "legendFormat": "error",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate({namespace=~\"$namespace\"} |~ \"(?i)\\\\b(warn|warning)\\\\b\" [2m]))",
+              "legendFormat": "warn",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Errors (last 1 h)",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background", "graphMode": "area" },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({namespace=~\"$namespace\"} |~ \"(?i)\\\\b(error|err|fatal|panic|exception)\\\\b\" [1h]))",
+              "legendFormat": "errors",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "logs",
+          "title": "Live Logs — $namespace",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 14, "w": 18, "x": 6, "y": 8 },
+          "options": {
+            "showTime": true,
+            "showLabels": false,
+            "showCommonLabels": false,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "expr": "{namespace=~\"$namespace\"} |~ \"(?i)$search\"",
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "tags": ["kubequest", "custom", "logs"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "label": "Loki",
+            "multi": false,
+            "name": "loki",
+            "options": [],
+            "query": "loki",
+            "refresh": 1,
+            "type": "datasource"
+          },
+          {
+            "current": { "text": "myapp", "value": "myapp" },
+            "datasource": { "type": "loki", "uid": "${loki}" },
+            "definition": "label_values(namespace)",
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".+",
+            "label": "Namespace",
+            "multi": true,
+            "name": "namespace",
+            "options": [],
+            "query": { "label": "namespace", "stream": "", "type": 1 },
+            "refresh": 2,
+            "sort": 1,
+            "type": "query"
+          },
+          {
+            "current": { "text": "", "value": "" },
+            "hide": 0,
+            "label": "Search",
+            "name": "search",
+            "options": [{ "text": "", "value": "", "selected": true }],
+            "query": "",
+            "type": "textbox"
+          }
+        ]
+      },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "KubeQuest — Logs",
+      "uid": "kubequest-logs",
+      "version": 1
+    }
