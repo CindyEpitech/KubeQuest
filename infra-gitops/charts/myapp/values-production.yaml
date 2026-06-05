@@ -2,7 +2,7 @@
 # This is the file CI (Phase D.1) bumps to roll out a new image tag under GitOps.
 image:
   repository: 10.0.9.227:5000/myapp
-  tag: v0.1.32
+  tag: v0.1.33
 
 # Secrets are pre-created in the myapp namespace (not managed by GitOps).
 # See infra-gitops/argocd/README.md.
