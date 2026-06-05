@@ -16,107 +16,48 @@ These are the scripts that actually live in `scripts/`:
 
 | Script | Purpose |
 |--------|---------|
+| `scripts/bootstrap.sh` | Provision a fresh 4-node kubeadm cluster from 4 running AWS VMs — prep, init, Flannel, join, label, kubeconfig |
 | `scripts/deploy.sh` | Build the image on kube-1, bump `values-dev.yaml`, push `develop` — ArgoCD (`myapp-dev`) rolls it out. The git push *is* the deploy. |
 | `scripts/load-test.sh` | Flood the app (`/cpu`) with requests to trigger HPA auto-scaling |
 | `scripts/break-deployment.sh` | Inject a broken image, prove zero downtime, then watch ArgoCD self-heal (automatic rollback) |
 
-> Cluster provisioning (kubeadm) and infra/tooling deploy are done out-of-band
-> (see PHASE_2 / PHASE_3) — there is no single `bootstrap.sh`/`deploy-infra.sh`
-> in the repo. The inline `bootstrap.sh` / `init-control-plane.sh` /
-> `deploy-infra.sh` / `deploy-app.sh` blocks below are kept as a reference of the
-> end-to-end flow, not as files that exist in `scripts/`.
+> Infra/tooling (nginx-ingress, Dashboard, kube-prometheus, Loki, OPA, Dex) is
+> deployed declaratively via Kustomize/Helm + ArgoCD (see PHASE_3 / the
+> `infra-gitops/` repo), not a single `deploy-infra.sh`. The `deploy-infra.sh` /
+> `deploy-app.sh` blocks further below are kept only as a flat reference of the
+> equivalent imperative commands.
 
 ---
 
-## bootstrap.sh
+## scripts/bootstrap.sh  *(real script)*
+
+Provisions a fresh 4-node cluster from your laptop, end to end. It assumes the
+4 VMs already exist and are tagged `Name=kube-1|kube-2|ingress|monitoring`
+(Amazon Linux 2023), then automates the full Phase 2 runbook:
+
+1. resolves all 4 node IPs from AWS (region `eu-west-3`)
+2. preps every node — swap off, kernel modules, sysctl, **containerd via `yum`**,
+   k8s repo, `kubelet/kubeadm/kubectl` (`v1.29`)
+3. `kubeadm init` on kube-1 (`--pod-network-cidr=10.244.0.0/16`) + Flannel CNI
+4. joins kube-2, ingress, monitoring with a freshly generated token
+5. removes the control-plane taint, labels `role=ingress` / `role=monitoring`
+   (matched by InternalIP, since node names are AWS DNS)
+6. copies the kubeconfig here, pointed at kube-1's **public** IP with
+   `insecure-skip-tls-verify` (the API cert only covers private IPs)
 
 ```bash
-#!/bin/bash
-# bootstrap.sh — Provision the full cluster from scratch
-set -e
-
-echo "==> Provisioning AWS infrastructure with Terraform..."
-cd terraform/
-terraform init -reconfigure
-terraform apply -auto-approve
-cd ..
-
-echo "==> Getting node IPs..."
-KUBE1_IP=$(terraform -chdir=terraform output -raw kube1_ip)
-KUBE2_IP=$(terraform -chdir=terraform output -raw kube2_ip)
-
-echo "==> Waiting for SSH to become available..."
-sleep 30
-
-echo "==> Bootstrapping control plane on kube-1..."
-ssh -i terraform/keys/kubequest ubuntu@$KUBE1_IP "bash -s" < scripts/init-control-plane.sh
-
-echo "==> Getting join command..."
-JOIN_CMD=$(ssh -i terraform/keys/kubequest ubuntu@$KUBE1_IP \
-  "kubeadm token create --print-join-command")
-
-echo "==> Joining kube-2 to the cluster..."
-ssh -i terraform/keys/kubequest ubuntu@$KUBE2_IP "sudo $JOIN_CMD"
-
-echo "==> Copying kubeconfig..."
-scp -i terraform/keys/kubequest ubuntu@$KUBE1_IP:/etc/kubernetes/admin.conf ~/.kube/config
-sed -i "s|server: https://.*:6443|server: https://$KUBE1_IP:6443|" ~/.kube/config
-
-echo "==> Verifying cluster..."
-kubectl get nodes
-
-echo "✅ Cluster is up and running!"
+./scripts/bootstrap.sh cindy            # fresh cluster
+FORCE_RESET=1 ./scripts/bootstrap.sh cindy   # kubeadm reset first, then re-bootstrap
 ```
+
+> Uses `yum` + `ec2-user`, **not** `apt`/`ubuntu` — Amazon Linux 2023. After it
+> finishes, deploy tooling (PHASE_3) and the app (`./scripts/deploy.sh`).
+> Worker nodes are reached directly if they have a public IP, else via an SSH
+> jump through kube-1.
 
 ---
 
-## scripts/init-control-plane.sh
-
-```bash
-#!/bin/bash
-# Runs on kube-1 — installs dependencies and bootstraps the control plane
-set -e
-
-# Install dependencies
-sudo apt-get update -qq
-sudo apt-get install -y -qq apt-transport-https ca-certificates curl containerd
-
-# Configure containerd
-sudo mkdir -p /etc/containerd
-containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-sudo systemctl restart containerd
-
-# Disable swap
-sudo swapoff -a
-
-# Install kubeadm, kubelet, kubectl
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | \
-  sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | \
-  sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo apt-get update -qq
-sudo apt-get install -y -qq kubeadm kubelet kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
-
-# Initialize cluster
-sudo kubeadm init --pod-network-cidr=10.244.0.0/16
-
-# Set up kubectl
-mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
-
-# Remove control plane taint (allow scheduling on kube-1)
-kubectl taint nodes $(hostname) node-role.kubernetes.io/control-plane:NoSchedule-
-
-# Install Flannel CNI
-kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
-```
-
----
-
-## deploy-infra.sh
+## deploy-infra.sh  *(reference only — real path is Kustomize/Helm + ArgoCD)*
 
 ```bash
 #!/bin/bash
@@ -354,14 +295,15 @@ curl "http://app.kubequest.local/leak?mb=1200&hold=5"
 Follow this exact order during the live demo:
 
 ```
-1. Bring up cluster + tooling   → kubeadm + Kustomize/Helm (PHASE_2 / PHASE_3)
-2. Run scripts/deploy.sh        → app deployed live via GitOps (ArgoCD)
-3. Open Grafana                 → show dashboards and metrics
-4. Run scripts/load-test.sh     → show HPA scaling up in real time (/cpu)
-5. Hit /leak endpoint           → show memory climb + OOMKill/restart in Grafana
-6. Run scripts/break-deployment.sh → broken deploy: zero downtime + auto-rollback
-7. Show OPA blocking bad pod    → kubectl run with :latest tag
-8. Show Dex login               → open protected URL, log in
+1. Run scripts/bootstrap.sh     → fresh 4-node cluster from scratch (kubeadm)
+2. Deploy tooling               → Kustomize/Helm + ArgoCD (PHASE_3, infra-gitops)
+3. Run scripts/deploy.sh        → app deployed live via GitOps (ArgoCD)
+4. Open Grafana                 → show dashboards and metrics
+5. Run scripts/load-test.sh     → show HPA scaling up in real time (/cpu)
+6. Hit /leak endpoint           → show memory climb + OOMKill/restart in Grafana
+7. Run scripts/break-deployment.sh → broken deploy: zero downtime + auto-rollback
+8. Show OPA blocking bad pod    → kubectl run with :latest tag
+9. Show Dex login               → open protected URL, log in
 ```
 
 ---
@@ -369,7 +311,8 @@ Follow this exact order during the live demo:
 ## Pre-Defense Checklist
 
 - [ ] All scripts tested at least twice end-to-end
-- [ ] Cluster can be reprovisioned in under 10 minutes
+- [ ] `bootstrap.sh` brings up a fresh 4-node cluster (all Ready) in under 10 minutes
+- [ ] 4 VMs tagged `kube-1`/`kube-2`/`ingress`/`monitoring` running before the demo
 - [ ] All tools accessible via browser (Dashboard, Grafana, Prometheus)
 - [ ] HPA scales under load-test.sh (`/cpu`)
 - [ ] `/leak` drives RSS up and triggers an OOMKill + restart (visible in Grafana)
