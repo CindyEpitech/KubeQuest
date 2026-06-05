@@ -49,7 +49,7 @@ trap cleanup EXIT INT TERM
 
 clear 2>/dev/null || true
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║   KubeQuest — Bonus features walkthrough                      ║${NC}"
+echo -e "${BOLD}║   KubeQuest — Bonus features walkthrough                     ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
 kubectl get ns "$APP_NS" >/dev/null 2>&1 || { no "Can't reach the cluster — run ./deploy.sh first."; exit 1; }
 # The app (not the busybox init) container image.
@@ -157,12 +157,12 @@ pause
 
 # ═════════════════════════════════════════════════════════════════════════════
 step "Done"
-echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}${BOLD}║   Bonuses demonstrated                                        ║${NC}"
-echo -e "${GREEN}${BOLD}╠══════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GREEN}${BOLD}╔═════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}${BOLD}║   Bonuses demonstrated                                      ║${NC}"
+echo -e "${GREEN}${BOLD}╠═════════════════════════════════════════════════════════════╣${NC}"
 for b in "ArgoCD GitOps" "Private registry" "Lightweight multi-stage image" \
          "cert-manager TLS (in-cluster CA)" "MySQL NetworkPolicy" "Least-privilege RBAC"; do
   printf "${GREEN}${BOLD}║${NC}  ✓ %-56s ${GREEN}${BOLD}║${NC}\n" "$b"
 done
-echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo -e "${GREEN}${BOLD}╚═════════════════════════════════════════════════════════════╝${NC}"
 say "Plus zero-downtime + automatic rollback: ./scripts/demo-rollback.sh"
