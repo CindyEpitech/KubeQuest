@@ -166,7 +166,7 @@ data:
       ],
       "refresh": "30s",
       "schemaVersion": 38,
-      "tags": ["kubequest", "custom", "ingress"],
+      "tags": ["kubequest", "ingress"],
       "templating": {
         "list": [
           {

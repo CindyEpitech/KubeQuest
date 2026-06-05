@@ -161,7 +161,7 @@ data:
       ],
       "refresh": "30s",
       "schemaVersion": 38,
-      "tags": ["kubequest", "custom", "capacity"],
+      "tags": ["kubequest", "capacity"],
       "templating": {
         "list": [
           {

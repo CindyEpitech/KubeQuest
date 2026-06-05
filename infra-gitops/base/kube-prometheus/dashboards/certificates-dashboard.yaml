@@ -166,7 +166,7 @@ data:
       ],
       "refresh": "1m",
       "schemaVersion": 38,
-      "tags": ["kubequest", "custom", "certificates"],
+      "tags": ["kubequest", "certificates"],
       "templating": {
         "list": [
           {
