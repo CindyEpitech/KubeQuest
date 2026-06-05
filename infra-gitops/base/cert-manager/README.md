@@ -22,9 +22,22 @@ helm repo add jetstack https://charts.jetstack.io
 helm repo update
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace \
-  --set crds.enabled=true \
+  --version v1.14.7 \                 # see note 1
+  --set installCRDs=true \
+  --set webhook.hostNetwork=true \    # see note 2
+  --set webhook.securePort=10260 \    # 10250 is the kubelet, so move it
   --wait
 ```
+
+> **Note 1 — pin v1.14.x on this cluster.** It runs Kubernetes 1.29. cert-manager
+> ≥1.15 ships CRDs that use `selectableFields`, which only exists on k8s ≥1.30, so
+> the install fails with *"field not declared in schema"*. v1.14.7 is the right line.
+>
+> **Note 2 — the webhook must run hostNetwork here.** This cluster's API server
+> can't reach pod-network pods (the same reason metrics-server and gatekeeper run
+> `hostNetwork`). Without it the API server times out calling the validation
+> webhook and every Issuer/Certificate apply fails with *"webhook ... context
+> deadline exceeded"*.
 
 After ArgoCD syncs the `infra` app (or `kubectl apply -k` this dir), check:
 
