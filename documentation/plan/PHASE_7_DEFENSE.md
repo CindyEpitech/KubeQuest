@@ -19,7 +19,8 @@ These are the scripts that actually live in `scripts/`:
 | `scripts/bootstrap.sh` | Provision a fresh 4-node kubeadm cluster from 4 running AWS VMs — prep, init, Flannel, join, label, kubeconfig |
 | `scripts/deploy.sh` | Build the image on kube-1, bump `values-dev.yaml`, push `develop` — ArgoCD (`myapp-dev`) rolls it out. The git push *is* the deploy. |
 | `scripts/load-test.sh` | Flood the app (`/cpu`) with requests to trigger HPA auto-scaling |
-| `scripts/break-deployment.sh` | Inject a broken image, prove zero downtime, then watch ArgoCD self-heal (automatic rollback) |
+| `scripts/break-deployment.sh` | Inject a broken image, prove zero downtime, then watch ArgoCD self-heal (automatic rollback) — non-interactive |
+| `scripts/demo-rollback.sh` | **Teacher-facing** narrated version of the above: paced with `[Enter]`, with a live uptime counter that proves zero requests are dropped |
 
 > Infra/tooling (nginx-ingress, Dashboard, kube-prometheus, Loki, OPA, Dex) is
 > deployed declaratively via Kustomize/Helm + ArgoCD (see PHASE_3 / the
@@ -223,10 +224,15 @@ Demonstrates the two safety nets baked into the app deployment, live:
    a readiness probe, so a broken image never becomes Ready and the old pods
    keep serving. The script proves it with live `curl`s returning `200` *while*
    the new pods sit in `ImagePullBackOff`.
-2. **Automatic GitOps rollback** — ArgoCD app `myapp-dev` runs with
-   `selfHeal: true`, so drifting the live image away from what git declares makes
-   ArgoCD revert it on its own. No human runs the rollback. If self-heal is
-   disabled/slow (e.g. the prod app), it falls back to `kubectl rollout undo`.
+2. **Automatic GitOps rollback** — the ArgoCD app (`myapp` for prod, `myapp-dev`
+   for dev) runs with `selfHeal: true`, so drifting the live image away from what
+   git declares makes ArgoCD revert it on its own. No human runs the rollback. If
+   self-heal is disabled/slow, it falls back to `kubectl rollout undo`.
+
+> For the **live defense**, prefer `scripts/demo-rollback.sh` — same mechanics,
+> but paced with `[Enter]` and with an on-screen uptime counter that turns the
+> zero-downtime claim into a hard number (`N/N requests OK, 0 failed`).
+> `break-deployment.sh` is the non-interactive equivalent (CI / quick check).
 
 ```bash
 ./scripts/break-deployment.sh                      # myapp / prod (default, HA)
@@ -301,7 +307,7 @@ Follow this exact order during the live demo:
 4. Open Grafana                 → show dashboards and metrics
 5. Run scripts/load-test.sh     → show HPA scaling up in real time (/cpu)
 6. Hit /leak endpoint           → show memory climb + OOMKill/restart in Grafana
-7. Run scripts/break-deployment.sh → broken deploy: zero downtime + auto-rollback
+7. Run scripts/demo-rollback.sh → broken deploy: zero downtime + auto-rollback (narrated)
 8. Show OPA blocking bad pod    → kubectl run with :latest tag
 9. Show Dex login               → open protected URL, log in
 ```
