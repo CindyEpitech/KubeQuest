@@ -12,6 +12,9 @@ metadata:
     # writes it to the TLS secret below. ssl-redirect stays off so plain HTTP and
     # the load-test / demo probers keep working alongside HTTPS.
     cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.clusterIssuer | quote }}
+    # Populate the leaf cert's Subject CN with the host (the SAN is authoritative,
+    # but an empty CN looks unfinished when the cert is inspected by hand).
+    cert-manager.io/common-name: {{ .Values.ingress.host | quote }}
     nginx.ingress.kubernetes.io/ssl-redirect: {{ .Values.ingress.tls.sslRedirect | quote }}
   {{- end }}
 spec:
