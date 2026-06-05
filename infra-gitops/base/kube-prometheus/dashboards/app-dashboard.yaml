@@ -147,7 +147,7 @@ data:
       ],
       "refresh": "30s",
       "schemaVersion": 38,
-      "tags": ["kubequest", "custom", "app"],
+      "tags": ["kubequest", "app"],
       "templating": {
         "list": [
           {

@@ -109,7 +109,7 @@ data:
       ],
       "refresh": "30s",
       "schemaVersion": 38,
-      "tags": ["kubequest", "custom", "logs"],
+      "tags": ["kubequest", "logs"],
       "templating": {
         "list": [
           {
