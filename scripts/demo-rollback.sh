@@ -73,6 +73,10 @@ http_code() {
   echo "${c:-000}"
 }
 
+# Poll a URL until it answers 200 — port-forwards (esp. to the hostNetwork
+# ingress controller) need a moment to come up before the first request lands.
+wait_200() { local u="$1" n="${2:-10}" i; for ((i=0; i<n; i++)); do [ "$(http_code "$u")" = "200" ] && return 0; sleep 1; done; return 1; }
+
 # Decide what the prober hits, preferring paths that exercise the real ingress:
 #   1. the external ingress URL (if /etc/hosts points at the ingress node)
 #   2. a port-forward to the nginx ingress controller + Host header — still the
@@ -86,18 +90,18 @@ setup_probe() {
   if kubectl -n "$INGRESS_NS" get svc "$INGRESS_SVC" >/dev/null 2>&1; then
     warn "$APP_URL not reachable — port-forwarding the nginx ingress controller"
     kubectl -n "$INGRESS_NS" port-forward "svc/$INGRESS_SVC" "$PF_PORT:80" >/dev/null 2>&1 &
-    PF_PID=$!; sleep 2
+    PF_PID=$!
     PROBE_URL="http://127.0.0.1:$PF_PORT/"; HOST_HEADER="$APP_HOST"
-    if [ "$(http_code "$PROBE_URL")" = "200" ]; then
+    if wait_200 "$PROBE_URL" 10; then
       ok "Probing via nginx: 127.0.0.1:$PF_PORT  Host: $APP_HOST  (real ingress path)"; return 0
     fi
     warn "Ingress-controller probe didn't answer — falling back to the Service"
     [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null; PF_PID=""; HOST_HEADER=""; sleep 1
   fi
   kubectl -n "$APP_NS" port-forward "svc/$DEPLOY" "$PF_PORT:80" >/dev/null 2>&1 &
-  PF_PID=$!; sleep 2
+  PF_PID=$!
   PROBE_URL="http://127.0.0.1:$PF_PORT/"; HOST_HEADER=""
-  if [ "$(http_code "$PROBE_URL")" = "200" ]; then
+  if wait_200 "$PROBE_URL" 10; then
     ok "Probing via port-forward to svc/$DEPLOY:80 (bypasses nginx)"; return 0
   fi
   warn "All probe paths failed — the uptime counter will have no data"; return 1
@@ -116,6 +120,29 @@ probe_stats() {
   echo "$total $ok $(( total - ok ))"
 }
 
+# Toggle ArgoCD self-heal on the app. We pause it during the break so the
+# broken state is actually visible (otherwise it reverts the drift in ~1s and
+# nobody sees the failure), then switch it back on to perform the rollback.
+ORIG_SELFHEAL=""
+set_selfheal() {
+  kubectl -n "$ARGO_NS" patch app "$ARGO_APP" --type merge \
+    -p "{\"spec\":{\"syncPolicy\":{\"automated\":{\"selfHeal\":$1}}}}" >/dev/null 2>&1
+}
+
+# Show the broken state: wait until a pod surfaces ImagePullBackOff/ErrImagePull
+# (up to ~40s, after the init container finishes), then print the pod list.
+show_broken_pods() {
+  local deadline=$(( $(date +%s) + 40 )) seen=0
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if kubectl -n "$APP_NS" get pods -l app.kubernetes.io/name=myapp \
+         -o jsonpath='{range .items[*]}{.status.containerStatuses[*].state.waiting.reason}{"\n"}{end}' 2>/dev/null \
+         | grep -qE 'ImagePullBackOff|ErrImagePull'; then seen=1; break; fi
+    sleep 2
+  done
+  kubectl -n "$APP_NS" get pods -l app.kubernetes.io/name=myapp
+  [ "$seen" -eq 1 ] || warn "(didn't catch ImagePullBackOff in the window — the pod may still be pulling)"
+}
+
 # Safety net: if the demo is interrupted while broken, put it back.
 cleanup() {
   [ -n "$PROBE_PID" ] && kill "$PROBE_PID" 2>/dev/null || true
@@ -127,6 +154,8 @@ cleanup() {
     warn "Interrupted while broken — rolling back so the cluster is left healthy..."
     kubectl -n "$APP_NS" set image deploy/"$DEPLOY" "$CONTAINER=$GOOD_IMAGE" >/dev/null 2>&1 || true
   fi
+  # Always put ArgoCD self-heal back the way we found it.
+  [ -n "$ORIG_SELFHEAL" ] && set_selfheal "$ORIG_SELFHEAL"
   rm -f "$PROBE_LOG"
 }
 trap cleanup EXIT INT TERM
@@ -159,7 +188,8 @@ echo
 say "Running image (declared in git):  ${BOLD}$GOOD_IMAGE${NC}"
 SYNC=$(kubectl -n "$ARGO_NS" get app "$ARGO_APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "?")
 HEALTH=$(kubectl -n "$ARGO_NS" get app "$ARGO_APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo "?")
-say "ArgoCD app '$ARGO_APP':  sync=${BOLD}$SYNC${NC}  health=${BOLD}$HEALTH${NC}"
+ORIG_SELFHEAL=$(kubectl -n "$ARGO_NS" get app "$ARGO_APP" -o jsonpath='{.spec.syncPolicy.automated.selfHeal}' 2>/dev/null)
+say "ArgoCD app '$ARGO_APP':  sync=${BOLD}$SYNC${NC}  health=${BOLD}$HEALTH${NC}  selfHeal=${BOLD}${ORIG_SELFHEAL:-?}${NC}"
 
 setup_probe || warn "The rollback still works; only the uptime counter is affected."
 pause
@@ -176,18 +206,21 @@ pause
 
 # ═════════════════════════════════════════════════════════════════════════════
 step "3/5  BREAK IT — deploy an image that cannot be pulled"
-say "Injecting a bogus image tag (same repo, tag does not exist):"
+say "First we briefly ${BOLD}pause ArgoCD's self-heal${NC} — otherwise it reverts the"
+say "drift in ~1 second and you'd never get to see the broken state. (We switch"
+say "it back on in step 4; the rollback is still done by ArgoCD, not by us.)"
+set_selfheal false && ok "selfHeal paused (temporary — restored at the end)"
+echo
+say "Now inject a bogus image tag (same repo, tag does not exist):"
 say "  ${BOLD}$BROKEN_IMAGE${NC}"
 kubectl -n "$APP_NS" set image deploy/"$DEPLOY" "$CONTAINER=$BROKEN_IMAGE"
 ok "Image drifted away from git. A new ReplicaSet is rolling out…"
 echo
-say "Watching the rollout — it will NOT complete (new pods can't pull):"
-kubectl -n "$APP_NS" rollout status deploy/"$DEPLOY" --timeout=40s || true
+say "Waiting for the broken pod to surface (it can't pull the image):"
+show_broken_pods
 echo
-kubectl -n "$APP_NS" get pods -l app.kubernetes.io/name=myapp
-echo
-say "Notice: the new pod is ${RED}ImagePullBackOff${NC}, but the old pod is still"
-say "${GREEN}Running${NC} — maxUnavailable=0 refuses to kill it until a replacement is Ready."
+say "The new pod is ${RED}ImagePullBackOff${NC}, but the old pods are still"
+say "${GREEN}Running${NC} — maxUnavailable=0 refuses to kill them until a replacement is Ready."
 pause
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -205,9 +238,10 @@ else warn "prober has no successful samples — external URL not reachable from 
 pause
 
 # ═════════════════════════════════════════════════════════════════════════════
-step "4/5  AUTOMATIC ROLLBACK — ArgoCD self-heals the drift"
-say "We do NOT run a rollback command. ArgoCD sees the live image no longer"
-say "matches git and reverts it on its own. (Nudging a refresh to speed it up.)"
+step "4/5  AUTOMATIC ROLLBACK — switch ArgoCD self-heal back on"
+say "We run ${BOLD}no rollback command${NC}. We just re-enable ArgoCD's self-heal and it"
+say "reverts the live image back to what git declares, entirely on its own."
+set_selfheal true && ok "selfHeal re-enabled — ArgoCD will now reconcile the drift"
 kubectl -n "$ARGO_NS" annotate app "$ARGO_APP" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 \
   || warn "Couldn't reach ArgoCD app — will fall back to 'kubectl rollout undo'"
 
