@@ -12,13 +12,19 @@ The goal is to never type commands from scratch during the defense — everythin
 
 ## Scripts Overview
 
+These are the scripts that actually live in `scripts/`:
+
 | Script | Purpose |
 |--------|---------|
-| `bootstrap.sh` | Provision cluster from scratch (Terraform + kubeadm) |
-| `deploy-infra.sh` | Deploy all cluster tooling (nginx, dashboard, prometheus, loki) |
-| `deploy-app.sh` | Deploy the application via Helm |
-| `load-test.sh` | Flood the app with requests to trigger HPA auto-scaling |
-| `break-deployment.sh` | Deploy a broken image to demo automatic rollback |
+| `scripts/deploy.sh` | Build the image on kube-1, bump `values-dev.yaml`, push `develop` — ArgoCD (`myapp-dev`) rolls it out. The git push *is* the deploy. |
+| `scripts/load-test.sh` | Flood the app (`/cpu`) with requests to trigger HPA auto-scaling |
+| `scripts/break-deployment.sh` | Inject a broken image, prove zero downtime, then watch ArgoCD self-heal (automatic rollback) |
+
+> Cluster provisioning (kubeadm) and infra/tooling deploy are done out-of-band
+> (see PHASE_2 / PHASE_3) — there is no single `bootstrap.sh`/`deploy-infra.sh`
+> in the repo. The inline `bootstrap.sh` / `init-control-plane.sh` /
+> `deploy-infra.sh` / `deploy-app.sh` blocks below are kept as a reference of the
+> end-to-end flow, not as files that exist in `scripts/`.
 
 ---
 
@@ -268,89 +274,78 @@ kubectl get pods -n myapp
 
 ---
 
-## break-deployment.sh
+## scripts/break-deployment.sh  *(real script)*
+
+Demonstrates the two safety nets baked into the app deployment, live:
+
+1. **Zero-downtime rolling update** — the Deployment uses `maxUnavailable: 0` +
+   a readiness probe, so a broken image never becomes Ready and the old pods
+   keep serving. The script proves it with live `curl`s returning `200` *while*
+   the new pods sit in `ImagePullBackOff`.
+2. **Automatic GitOps rollback** — ArgoCD app `myapp-dev` runs with
+   `selfHeal: true`, so drifting the live image away from what git declares makes
+   ArgoCD revert it on its own. No human runs the rollback. If self-heal is
+   disabled/slow (e.g. the prod app), it falls back to `kubectl rollout undo`.
 
 ```bash
-#!/bin/bash
-# break-deployment.sh — Deploy a broken image to demo rollback
-set -e
-
-echo "==> Current deployment state:"
-kubectl get pods -n myapp
-kubectl rollout history deployment/myapp -n myapp
-
-echo ""
-echo "==> Deploying broken image (this-image-does-not-exist:broken)..."
-kubectl set image deployment/myapp myapp=this-image-does-not-exist:broken -n myapp
-
-echo ""
-echo "==> Watching rollout (will fail after ImagePullBackOff)..."
-kubectl rollout status deployment/myapp -n myapp --timeout=60s || true
-
-echo ""
-echo "==> Pods are failing — triggering rollback..."
-kubectl rollout undo deployment/myapp -n myapp
-
-echo ""
-echo "==> Waiting for rollback to complete..."
-kubectl rollout status deployment/myapp -n myapp --timeout=2m
-
-echo ""
-echo "✅ Rollback complete! Pods are healthy again."
-kubectl get pods -n myapp
+./scripts/break-deployment.sh                      # myapp / prod (default, HA)
+./scripts/break-deployment.sh myapp-dev myapp-dev  # dev (single pod)
 ```
+
+Defaults to prod (`myapp`) because it runs 2–6 replicas, so the broken rollout
+has live pods to keep serving. Both apps have `selfHeal: true`, so the automatic
+rollback works in either namespace.
+
+Flow: record the good image → `kubectl set image` to `…/myapp:broken-<ts>`
+(same repo, only the tag is bad → `ImagePullBackOff`) → prove uptime → nudge
+ArgoCD (`refresh=hard`) and poll until the live image returns to the git tag →
+confirm healthy.
+
+> Assumes `kubectl` already points at the cluster. After a reboot run
+> `./scripts/deploy.sh` once first — it refreshes the kube-1 API-server IP.
 
 ---
 
-## Failure Endpoints (add to your app)
+## Failure Endpoints  *(already in the app)*
 
-Add these endpoints to your application code for the demo:
+Both demo endpoints live in the Laravel app at `sample-app/routes/web.php`.
+They ship in the image, so just hit them with `curl` (or a browser) during the demo.
 
-### Node.js
-```javascript
-// Memory leak endpoint
-app.get('/leak', (req, res) => {
-  const leaks = []
-  const interval = setInterval(() => {
-    leaks.push(Buffer.alloc(1024 * 1024)) // allocate 1MB per tick
-  }, 100)
+### `/cpu` — CPU spike (drives HPA)
+Burns CPU for ~5 s per request. Used by `load-test.sh` to push CPU past the HPA
+target and trigger scale-up.
 
-  setTimeout(() => clearInterval(interval), 30000) // stop after 30s
-  res.json({ status: 'leaking memory...' })
-})
-
-// CPU spike endpoint
-app.get('/cpu', (req, res) => {
-  const start = Date.now()
-  while (Date.now() - start < 10000) {
-    Math.sqrt(Math.random()) // burn CPU for 10s
-  }
-  res.json({ status: 'cpu spike done' })
-})
+```bash
+curl http://app-dev.kubequest.local/cpu
 ```
 
-### Python (Flask)
-```python
-import time
-import threading
+### `/leak` — memory leak (drives OOMKill)
+Allocates memory in real 10 MB chunks and holds it, so the pod's RSS climbs
+visibly in Grafana and, past the container memory limit, the pod gets OOMKilled
+and auto-restarts. Sets `memory_limit=-1` internally so the *container* limit is
+the ceiling, not PHP's.
 
-@app.route('/leak')
-def leak():
-    leaks = []
-    def allocate():
-        for _ in range(100):
-            leaks.append(b'x' * 1024 * 1024)
-            time.sleep(0.1)
-    threading.Thread(target=allocate).start()
-    return {'status': 'leaking memory...'}
+The app container's memory **limit is `1Gi`** (`charts/myapp/values.yaml`), so
+pick `mb` relative to that:
 
-@app.route('/cpu')
-def cpu():
-    end = time.time() + 10
-    while time.time() < end:
-        _ = sum(i*i for i in range(10000))
-    return {'status': 'cpu spike done'}
+```bash
+# Just show the climb in Grafana (stays under the 1Gi limit):
+curl "http://app.kubequest.local/leak?mb=256&hold=30"
+
+# Actually trigger the OOMKill + auto-restart (crosses 1Gi):
+curl "http://app.kubequest.local/leak?mb=1200&hold=5"
+
+#   ?mb   = total megabytes to allocate (default 256)
+#   ?hold = seconds to hold the memory before releasing (default 30)
 ```
+
+> For the OOM case the pod is killed *during* allocation, so `hold` barely
+> matters — keep it small. Watch it with `kubectl -n myapp get pods -w` (the
+> `RESTARTS` count ticks up with reason `OOMKilled`). In prod the other
+> replicas keep serving while the killed one restarts — zero downtime again.
+
+> These run from the registry image — rebuild + deploy (`./scripts/deploy.sh`)
+> after editing the routes for the change to take effect.
 
 ---
 
@@ -359,15 +354,14 @@ def cpu():
 Follow this exact order during the live demo:
 
 ```
-1. Run bootstrap.sh        → fresh cluster from scratch
-2. Run deploy-infra.sh     → all tooling deployed live
-3. Run deploy-app.sh       → application live
-4. Open Grafana            → show dashboards and metrics
-5. Run load-test.sh        → show HPA scaling up in real time
-6. Hit /cpu endpoint       → show CPU spike in Grafana
-7. Run break-deployment.sh → show broken deploy + auto-rollback
-8. Show OPA blocking bad pod → kubectl run with :latest tag
-9. Show Dex login          → open protected URL, log in
+1. Bring up cluster + tooling   → kubeadm + Kustomize/Helm (PHASE_2 / PHASE_3)
+2. Run scripts/deploy.sh        → app deployed live via GitOps (ArgoCD)
+3. Open Grafana                 → show dashboards and metrics
+4. Run scripts/load-test.sh     → show HPA scaling up in real time (/cpu)
+5. Hit /leak endpoint           → show memory climb + OOMKill/restart in Grafana
+6. Run scripts/break-deployment.sh → broken deploy: zero downtime + auto-rollback
+7. Show OPA blocking bad pod    → kubectl run with :latest tag
+8. Show Dex login               → open protected URL, log in
 ```
 
 ---
@@ -377,8 +371,9 @@ Follow this exact order during the live demo:
 - [ ] All scripts tested at least twice end-to-end
 - [ ] Cluster can be reprovisioned in under 10 minutes
 - [ ] All tools accessible via browser (Dashboard, Grafana, Prometheus)
-- [ ] HPA scales under load-test.sh
-- [ ] Rollback completes cleanly
+- [ ] HPA scales under load-test.sh (`/cpu`)
+- [ ] `/leak` drives RSS up and triggers an OOMKill + restart (visible in Grafana)
+- [ ] break-deployment.sh: app stays 200 throughout, then ArgoCD self-heals the image
 - [ ] OPA rejects pods without limits and with :latest tags
 - [ ] Dex login works on all protected routes
 - [ ] `/etc/hosts` file ready on demo machine
