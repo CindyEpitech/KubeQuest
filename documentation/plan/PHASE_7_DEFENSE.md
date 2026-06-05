@@ -12,105 +12,53 @@ The goal is to never type commands from scratch during the defense — everythin
 
 ## Scripts Overview
 
+These are the scripts that actually live in `scripts/`:
+
 | Script | Purpose |
 |--------|---------|
-| `bootstrap.sh` | Provision cluster from scratch (Terraform + kubeadm) |
-| `deploy-infra.sh` | Deploy all cluster tooling (nginx, dashboard, prometheus, loki) |
-| `deploy-app.sh` | Deploy the application via Helm |
-| `load-test.sh` | Flood the app with requests to trigger HPA auto-scaling |
-| `break-deployment.sh` | Deploy a broken image to demo automatic rollback |
+| `scripts/bootstrap.sh` | Provision a fresh 4-node kubeadm cluster from 4 running AWS VMs — prep, init, Flannel, join, label, kubeconfig |
+| `scripts/deploy.sh` | Build the image on kube-1, bump `values-dev.yaml`, push `develop` — ArgoCD (`myapp-dev`) rolls it out. The git push *is* the deploy. |
+| `scripts/load-test.sh` | Flood the app (`/cpu`) with requests to trigger HPA auto-scaling |
+| `scripts/break-deployment.sh` | Inject a broken image, prove zero downtime, then watch ArgoCD self-heal (automatic rollback) — non-interactive |
+| `scripts/demo-rollback.sh` | **Teacher-facing** narrated version of the above: paced with `[Enter]`, with a live uptime counter that proves zero requests are dropped |
+
+> Infra/tooling (nginx-ingress, Dashboard, kube-prometheus, Loki, OPA, Dex) is
+> deployed declaratively via Kustomize/Helm + ArgoCD (see PHASE_3 / the
+> `infra-gitops/` repo), not a single `deploy-infra.sh`. The `deploy-infra.sh` /
+> `deploy-app.sh` blocks further below are kept only as a flat reference of the
+> equivalent imperative commands.
 
 ---
 
-## bootstrap.sh
+## scripts/bootstrap.sh  *(real script)*
+
+Provisions a fresh 4-node cluster from your laptop, end to end. It assumes the
+4 VMs already exist and are tagged `Name=kube-1|kube-2|ingress|monitoring`
+(Amazon Linux 2023), then automates the full Phase 2 runbook:
+
+1. resolves all 4 node IPs from AWS (region `eu-west-3`)
+2. preps every node — swap off, kernel modules, sysctl, **containerd via `yum`**,
+   k8s repo, `kubelet/kubeadm/kubectl` (`v1.29`)
+3. `kubeadm init` on kube-1 (`--pod-network-cidr=10.244.0.0/16`) + Flannel CNI
+4. joins kube-2, ingress, monitoring with a freshly generated token
+5. removes the control-plane taint, labels `role=ingress` / `role=monitoring`
+   (matched by InternalIP, since node names are AWS DNS)
+6. copies the kubeconfig here, pointed at kube-1's **public** IP with
+   `insecure-skip-tls-verify` (the API cert only covers private IPs)
 
 ```bash
-#!/bin/bash
-# bootstrap.sh — Provision the full cluster from scratch
-set -e
-
-echo "==> Provisioning AWS infrastructure with Terraform..."
-cd terraform/
-terraform init -reconfigure
-terraform apply -auto-approve
-cd ..
-
-echo "==> Getting node IPs..."
-KUBE1_IP=$(terraform -chdir=terraform output -raw kube1_ip)
-KUBE2_IP=$(terraform -chdir=terraform output -raw kube2_ip)
-
-echo "==> Waiting for SSH to become available..."
-sleep 30
-
-echo "==> Bootstrapping control plane on kube-1..."
-ssh -i terraform/keys/kubequest ubuntu@$KUBE1_IP "bash -s" < scripts/init-control-plane.sh
-
-echo "==> Getting join command..."
-JOIN_CMD=$(ssh -i terraform/keys/kubequest ubuntu@$KUBE1_IP \
-  "kubeadm token create --print-join-command")
-
-echo "==> Joining kube-2 to the cluster..."
-ssh -i terraform/keys/kubequest ubuntu@$KUBE2_IP "sudo $JOIN_CMD"
-
-echo "==> Copying kubeconfig..."
-scp -i terraform/keys/kubequest ubuntu@$KUBE1_IP:/etc/kubernetes/admin.conf ~/.kube/config
-sed -i "s|server: https://.*:6443|server: https://$KUBE1_IP:6443|" ~/.kube/config
-
-echo "==> Verifying cluster..."
-kubectl get nodes
-
-echo "✅ Cluster is up and running!"
+./scripts/bootstrap.sh cindy            # fresh cluster
+FORCE_RESET=1 ./scripts/bootstrap.sh cindy   # kubeadm reset first, then re-bootstrap
 ```
+
+> Uses `yum` + `ec2-user`, **not** `apt`/`ubuntu` — Amazon Linux 2023. After it
+> finishes, deploy tooling (PHASE_3) and the app (`./scripts/deploy.sh`).
+> Worker nodes are reached directly if they have a public IP, else via an SSH
+> jump through kube-1.
 
 ---
 
-## scripts/init-control-plane.sh
-
-```bash
-#!/bin/bash
-# Runs on kube-1 — installs dependencies and bootstraps the control plane
-set -e
-
-# Install dependencies
-sudo apt-get update -qq
-sudo apt-get install -y -qq apt-transport-https ca-certificates curl containerd
-
-# Configure containerd
-sudo mkdir -p /etc/containerd
-containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-sudo systemctl restart containerd
-
-# Disable swap
-sudo swapoff -a
-
-# Install kubeadm, kubelet, kubectl
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | \
-  sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | \
-  sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo apt-get update -qq
-sudo apt-get install -y -qq kubeadm kubelet kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
-
-# Initialize cluster
-sudo kubeadm init --pod-network-cidr=10.244.0.0/16
-
-# Set up kubectl
-mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
-
-# Remove control plane taint (allow scheduling on kube-1)
-kubectl taint nodes $(hostname) node-role.kubernetes.io/control-plane:NoSchedule-
-
-# Install Flannel CNI
-kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
-```
-
----
-
-## deploy-infra.sh
+## deploy-infra.sh  *(reference only — real path is Kustomize/Helm + ArgoCD)*
 
 ```bash
 #!/bin/bash
@@ -268,89 +216,83 @@ kubectl get pods -n myapp
 
 ---
 
-## break-deployment.sh
+## scripts/break-deployment.sh  *(real script)*
+
+Demonstrates the two safety nets baked into the app deployment, live:
+
+1. **Zero-downtime rolling update** — the Deployment uses `maxUnavailable: 0` +
+   a readiness probe, so a broken image never becomes Ready and the old pods
+   keep serving. The script proves it with live `curl`s returning `200` *while*
+   the new pods sit in `ImagePullBackOff`.
+2. **Automatic GitOps rollback** — the ArgoCD app (`myapp` for prod, `myapp-dev`
+   for dev) runs with `selfHeal: true`, so drifting the live image away from what
+   git declares makes ArgoCD revert it on its own. No human runs the rollback. If
+   self-heal is disabled/slow, it falls back to `kubectl rollout undo`.
+
+> For the **live defense**, prefer `scripts/demo-rollback.sh` — same mechanics,
+> but paced with `[Enter]` and with an on-screen uptime counter that turns the
+> zero-downtime claim into a hard number (`N/N requests OK, 0 failed`).
+> `break-deployment.sh` is the non-interactive equivalent (CI / quick check).
 
 ```bash
-#!/bin/bash
-# break-deployment.sh — Deploy a broken image to demo rollback
-set -e
-
-echo "==> Current deployment state:"
-kubectl get pods -n myapp
-kubectl rollout history deployment/myapp -n myapp
-
-echo ""
-echo "==> Deploying broken image (this-image-does-not-exist:broken)..."
-kubectl set image deployment/myapp myapp=this-image-does-not-exist:broken -n myapp
-
-echo ""
-echo "==> Watching rollout (will fail after ImagePullBackOff)..."
-kubectl rollout status deployment/myapp -n myapp --timeout=60s || true
-
-echo ""
-echo "==> Pods are failing — triggering rollback..."
-kubectl rollout undo deployment/myapp -n myapp
-
-echo ""
-echo "==> Waiting for rollback to complete..."
-kubectl rollout status deployment/myapp -n myapp --timeout=2m
-
-echo ""
-echo "✅ Rollback complete! Pods are healthy again."
-kubectl get pods -n myapp
+./scripts/break-deployment.sh                      # myapp / prod (default, HA)
+./scripts/break-deployment.sh myapp-dev myapp-dev  # dev (single pod)
 ```
+
+Defaults to prod (`myapp`) because it runs 2–6 replicas, so the broken rollout
+has live pods to keep serving. Both apps have `selfHeal: true`, so the automatic
+rollback works in either namespace.
+
+Flow: record the good image → `kubectl set image` to `…/myapp:broken-<ts>`
+(same repo, only the tag is bad → `ImagePullBackOff`) → prove uptime → nudge
+ArgoCD (`refresh=hard`) and poll until the live image returns to the git tag →
+confirm healthy.
+
+> Assumes `kubectl` already points at the cluster. After a reboot run
+> `./scripts/deploy.sh` once first — it refreshes the kube-1 API-server IP.
 
 ---
 
-## Failure Endpoints (add to your app)
+## Failure Endpoints  *(already in the app)*
 
-Add these endpoints to your application code for the demo:
+Both demo endpoints live in the Laravel app at `sample-app/routes/web.php`.
+They ship in the image, so just hit them with `curl` (or a browser) during the demo.
 
-### Node.js
-```javascript
-// Memory leak endpoint
-app.get('/leak', (req, res) => {
-  const leaks = []
-  const interval = setInterval(() => {
-    leaks.push(Buffer.alloc(1024 * 1024)) // allocate 1MB per tick
-  }, 100)
+### `/cpu` — CPU spike (drives HPA)
+Burns CPU for ~5 s per request. Used by `load-test.sh` to push CPU past the HPA
+target and trigger scale-up.
 
-  setTimeout(() => clearInterval(interval), 30000) // stop after 30s
-  res.json({ status: 'leaking memory...' })
-})
-
-// CPU spike endpoint
-app.get('/cpu', (req, res) => {
-  const start = Date.now()
-  while (Date.now() - start < 10000) {
-    Math.sqrt(Math.random()) // burn CPU for 10s
-  }
-  res.json({ status: 'cpu spike done' })
-})
+```bash
+curl http://app-dev.kubequest.local/cpu
 ```
 
-### Python (Flask)
-```python
-import time
-import threading
+### `/leak` — memory leak (drives OOMKill)
+Allocates memory in real 10 MB chunks and holds it, so the pod's RSS climbs
+visibly in Grafana and, past the container memory limit, the pod gets OOMKilled
+and auto-restarts. Sets `memory_limit=-1` internally so the *container* limit is
+the ceiling, not PHP's.
 
-@app.route('/leak')
-def leak():
-    leaks = []
-    def allocate():
-        for _ in range(100):
-            leaks.append(b'x' * 1024 * 1024)
-            time.sleep(0.1)
-    threading.Thread(target=allocate).start()
-    return {'status': 'leaking memory...'}
+The app container's memory **limit is `1Gi`** (`charts/myapp/values.yaml`), so
+pick `mb` relative to that:
 
-@app.route('/cpu')
-def cpu():
-    end = time.time() + 10
-    while time.time() < end:
-        _ = sum(i*i for i in range(10000))
-    return {'status': 'cpu spike done'}
+```bash
+# Just show the climb in Grafana (stays under the 1Gi limit):
+curl "http://app.kubequest.local/leak?mb=256&hold=30"
+
+# Actually trigger the OOMKill + auto-restart (crosses 1Gi):
+curl "http://app.kubequest.local/leak?mb=1200&hold=5"
+
+#   ?mb   = total megabytes to allocate (default 256)
+#   ?hold = seconds to hold the memory before releasing (default 30)
 ```
+
+> For the OOM case the pod is killed *during* allocation, so `hold` barely
+> matters — keep it small. Watch it with `kubectl -n myapp get pods -w` (the
+> `RESTARTS` count ticks up with reason `OOMKilled`). In prod the other
+> replicas keep serving while the killed one restarts — zero downtime again.
+
+> These run from the registry image — rebuild + deploy (`./scripts/deploy.sh`)
+> after editing the routes for the change to take effect.
 
 ---
 
@@ -359,15 +301,15 @@ def cpu():
 Follow this exact order during the live demo:
 
 ```
-1. Run bootstrap.sh        → fresh cluster from scratch
-2. Run deploy-infra.sh     → all tooling deployed live
-3. Run deploy-app.sh       → application live
-4. Open Grafana            → show dashboards and metrics
-5. Run load-test.sh        → show HPA scaling up in real time
-6. Hit /cpu endpoint       → show CPU spike in Grafana
-7. Run break-deployment.sh → show broken deploy + auto-rollback
-8. Show OPA blocking bad pod → kubectl run with :latest tag
-9. Show Dex login          → open protected URL, log in
+1. Run scripts/bootstrap.sh     → fresh 4-node cluster from scratch (kubeadm)
+2. Deploy tooling               → Kustomize/Helm + ArgoCD (PHASE_3, infra-gitops)
+3. Run scripts/deploy.sh        → app deployed live via GitOps (ArgoCD)
+4. Open Grafana                 → show dashboards and metrics
+5. Run scripts/load-test.sh     → show HPA scaling up in real time (/cpu)
+6. Hit /leak endpoint           → show memory climb + OOMKill/restart in Grafana
+7. Run scripts/demo-rollback.sh → broken deploy: zero downtime + auto-rollback (narrated)
+8. Show OPA blocking bad pod    → kubectl run with :latest tag
+9. Show Dex login               → open protected URL, log in
 ```
 
 ---
@@ -375,10 +317,12 @@ Follow this exact order during the live demo:
 ## Pre-Defense Checklist
 
 - [ ] All scripts tested at least twice end-to-end
-- [ ] Cluster can be reprovisioned in under 10 minutes
+- [ ] `bootstrap.sh` brings up a fresh 4-node cluster (all Ready) in under 10 minutes
+- [ ] 4 VMs tagged `kube-1`/`kube-2`/`ingress`/`monitoring` running before the demo
 - [ ] All tools accessible via browser (Dashboard, Grafana, Prometheus)
-- [ ] HPA scales under load-test.sh
-- [ ] Rollback completes cleanly
+- [ ] HPA scales under load-test.sh (`/cpu`)
+- [ ] `/leak` drives RSS up and triggers an OOMKill + restart (visible in Grafana)
+- [ ] break-deployment.sh: app stays 200 throughout, then ArgoCD self-heals the image
 - [ ] OPA rejects pods without limits and with :latest tags
 - [ ] Dex login works on all protected routes
 - [ ] `/etc/hosts` file ready on demo machine
