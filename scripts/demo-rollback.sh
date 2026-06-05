@@ -53,12 +53,35 @@ BROKEN_IMAGE="$REGISTRY/myapp:broken-$(date +%s)"
 HEAL_TIMEOUT=180
 [ "$APP_NS" = "myapp-dev" ] && APP_URL="http://app-dev.kubequest.local" || APP_URL="http://app.kubequest.local"
 
-PROBE_LOG="$(mktemp)"; PROBE_PID=""
-http_code() { curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$APP_URL/" 2>/dev/null || echo "000"; }
+PROBE_LOG="$(mktemp)"; PROBE_PID=""; PF_PID=""
+PROBE_URL="$APP_URL/"          # resolved by setup_probe (external, else port-forward)
+PF_PORT=18080
+# curl already prints "000" on failure via -w, so don't append our own fallback
+# (that produced "000000"); just default to 000 if curl writes nothing at all.
+http_code() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$1" 2>/dev/null); echo "${c:-000}"; }
+
+# Decide what the prober hits. Prefer the real external ingress URL; if it isn't
+# reachable from this machine (no /etc/hosts entry, ClusterIP-only ingress, WSL),
+# fall back to a port-forward straight to the Service so the uptime counter still
+# works. Sets PROBE_URL; returns non-zero if neither path answers.
+setup_probe() {
+  if [ "$(http_code "$APP_URL/")" = "200" ]; then
+    PROBE_URL="$APP_URL/"; ok "Probing the real ingress URL: $APP_URL"; return 0
+  fi
+  warn "$APP_URL not reachable from here — port-forwarding svc/$DEPLOY instead"
+  kubectl -n "$APP_NS" port-forward "svc/$DEPLOY" "$PF_PORT:80" >/dev/null 2>&1 &
+  PF_PID=$!
+  sleep 2
+  PROBE_URL="http://127.0.0.1:$PF_PORT/"
+  if [ "$(http_code "$PROBE_URL")" = "200" ]; then
+    ok "Probing via port-forward: 127.0.0.1:$PF_PORT -> svc/$DEPLOY:80"; return 0
+  fi
+  warn "Port-forward probe also failed — the uptime counter will have no data"; return 1
+}
 
 # Background uptime prober — one request/second appended to $PROBE_LOG.
 start_prober() {
-  ( while :; do echo "$(date +%H:%M:%S) $(http_code)"; sleep 1; done >> "$PROBE_LOG" ) &
+  ( while :; do echo "$(date +%H:%M:%S) $(http_code "$PROBE_URL")"; sleep 1; done >> "$PROBE_LOG" ) &
   PROBE_PID=$!
 }
 # total ok fail  (2xx/3xx counts as a successful request)
@@ -72,6 +95,7 @@ probe_stats() {
 # Safety net: if the demo is interrupted while broken, put it back.
 cleanup() {
   [ -n "$PROBE_PID" ] && kill "$PROBE_PID" 2>/dev/null || true
+  [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
   local cur
   cur=$(kubectl -n "$APP_NS" get deploy "$DEPLOY" \
     -o jsonpath="{.spec.template.spec.containers[?(@.name=='$CONTAINER')].image}" 2>/dev/null || echo "")
@@ -113,17 +137,13 @@ SYNC=$(kubectl -n "$ARGO_NS" get app "$ARGO_APP" -o jsonpath='{.status.sync.stat
 HEALTH=$(kubectl -n "$ARGO_NS" get app "$ARGO_APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo "?")
 say "ArgoCD app '$ARGO_APP':  sync=${BOLD}$SYNC${NC}  health=${BOLD}$HEALTH${NC}"
 
-CODE=$(http_code)
-if [ "$CODE" = "200" ]; then ok "App answers HTTP $CODE at $APP_URL"
-else warn "App returned HTTP $CODE at $APP_URL — is /etc/hosts pointed at the ingress node?"
-     warn "The rollback still works; the live uptime counter just won't have data."
-fi
+setup_probe || warn "The rollback still works; only the uptime counter is affected."
 pause
 
 # ═════════════════════════════════════════════════════════════════════════════
 step "2/5  Start the live uptime monitor (proves zero-downtime)"
 start_prober
-say "A background prober now hits ${BOLD}$APP_URL${NC} once per second and tallies"
+say "A background prober now hits ${BOLD}$PROBE_URL${NC} once per second and tallies"
 say "every response. Watch this counter stay green through the whole break."
 sleep 4
 read -r T O F <<<"$(probe_stats)"
@@ -193,7 +213,7 @@ step "5/5  Result"
 [ -n "$PROBE_PID" ] && kill "$PROBE_PID" 2>/dev/null || true; PROBE_PID=""
 kubectl -n "$APP_NS" get pods -l app.kubernetes.io/name=myapp
 read -r T O F <<<"$(probe_stats)"
-CODE=$(http_code)
+CODE=$(http_code "$PROBE_URL")
 echo
 echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}${BOLD}║   Requirement demonstrated                                   ║${NC}"
