@@ -5,6 +5,7 @@ resources:
   - grafana-ingress.yaml
   - prometheus-ingress.yaml
   - alert-memory.yaml
+  - servicemonitor-cert-manager.yaml
   - dashboards/app-dashboard.yaml
   - dashboards/infra-dashboard.yaml
   - dashboards/logs-dashboard.yaml
