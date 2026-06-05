@@ -162,7 +162,7 @@ trap cleanup EXIT INT TERM
 
 clear 2>/dev/null || true
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║   KubeQuest — Broken deployment with AUTOMATIC ROLLBACK       ║${NC}"
+echo -e "${BOLD}║   KubeQuest — Broken deployment with AUTOMATIC ROLLBACK      ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
 say "Defense requirement:"
 say "  ${BOLD}\"demonstrate a full deployment process and a broken deployment"
