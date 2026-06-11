@@ -309,18 +309,24 @@ kubectl auth can-i get secrets --as=system:serviceaccount:<ns>:cluster-auditor  
 kubectl auth can-i list pods   --as=system:serviceaccount:<ns>:cluster-auditor   # yes
 ```
 
-## 5.6 NetworkPolicy (network hardening) ⚠️ written, toggle off
+## 5.6 NetworkPolicy (network hardening) ✅ enabled on dev + prod
 
 **Implementation.** `charts/myapp/templates/networkpolicy.yaml` — default-deny
-ingress to MySQL, allowing only app + backup pods on 3306. Calico enforces it.
-Currently `networkPolicy.enabled: false` everywhere (validate on dev, then flip).
+ingress to the chart's MySQL pod (`app: mysql`), allowing only the app pods and
+the backup CronJob pods on 3306. Enabled in both `values-dev.yaml` and
+`values-production.yaml` (`networkPolicy.enabled: true`); validated on dev first,
+then rolled to prod. The CNI is **Calico**, which actually enforces it (Flannel
+would silently ignore it — see Part 4).
 
-**Prove it (after enabling on dev/prod).**
+**Prove it** (swap `myapp` ↔ `myapp-dev` for the dev namespace):
 ```bash
-kubectl get networkpolicy -n myapp
-# Allowed: app pod → mysql:3306 succeeds
-# Denied: a random pod → mysql:3306 times out
-kubectl run probe --rm -it --image=busybox -n myapp -- nc -zv <mysql> 3306   # blocked
+kubectl get networkpolicy -n myapp                 # myapp-myapp-mysql present
+
+# Allowed: an app pod can still reach MySQL on 3306
+kubectl exec -n myapp deploy/<app-deploy> -- nc -zv <mysql-svc> 3306   # succeeds
+
+# Denied: an unrelated pod cannot
+kubectl run probe --rm -it --image=busybox -n myapp -- nc -zv <mysql-svc> 3306   # times out
 ```
 
 ## 5.7 Zero-downtime deploy + automatic rollback ✅ (the headline demo)

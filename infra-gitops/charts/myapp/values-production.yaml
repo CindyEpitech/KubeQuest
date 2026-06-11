@@ -18,10 +18,11 @@ ingress:
   tls:
     enabled: true
 
-# MySQL NetworkPolicy (bonus). Leave off until it's been validated on dev
-# (myapp-dev); flip to true once the dev app is confirmed healthy with it on.
+# MySQL NetworkPolicy (bonus). Default-deny ingress to the chart's MySQL pod,
+# allowing only the app + backup pods on 3306. Validated healthy on dev
+# (myapp-dev) first, now enabled in prod. Calico enforces it.
 networkPolicy:
-  enabled: false
+  enabled: true
 
 # Least-privilege operator SA scoped to the myapp namespace (bonus). Additive.
 rbac:
