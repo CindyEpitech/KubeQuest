@@ -237,10 +237,10 @@ labels `role=ingress`/`role=monitoring`, copies kubeconfig to your laptop.
 kubectl get nodes -o wide                  # 4 nodes Ready, roles labeled
 kubectl apply -k infra-gitops/overlays/production   # deploy infra with kustomize
 ```
-> ⚠️ **Caveat to know before the defense:** `bootstrap.sh` installs **Flannel**, but
-> the long-lived cluster runs **Calico** (which is what enforces NetworkPolicies).
-> If you bootstrap fresh and want to demo the NetworkPolicy bonus, switch the CNI
-> step to Calico, otherwise the policy won't be enforced. (See `left-to-do.txt`.)
+> ℹ️ **CNI:** `bootstrap.sh` installs **Calico** (`v3.27.5`, pod CIDR
+> `192.168.0.0/16`), matching the long-lived cluster. Calico enforces
+> NetworkPolicy, so a freshly-bootstrapped cluster can demo the NetworkPolicy
+> bonus too. Override the version with `CALICO_VERSION=...` if you bump Kubernetes.
 
 ---
 
