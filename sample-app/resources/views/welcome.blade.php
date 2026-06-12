@@ -149,7 +149,7 @@
                 $('#reset').click(function () {
                     $.get('/api/counter/reset', render);
                 });
-            });
+            })
         </script>
     </body>
 </html>
