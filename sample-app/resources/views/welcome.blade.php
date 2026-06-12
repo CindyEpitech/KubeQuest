@@ -32,7 +32,7 @@
                 margin: 0;
                 display: flex;
                 flex-direction: column;
-                background-color: var(--card);
+                background-color: yellow;
                 color: var(--text);
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
                     Roboto, Helvetica, Arial, sans-serif;
