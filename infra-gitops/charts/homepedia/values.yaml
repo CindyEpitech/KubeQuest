@@ -1,0 +1,138 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HomePedia — Helm values (base / production-leaning defaults)
+#
+# Deploys three components into one namespace:
+#   - frontend : Next.js 16 (standalone) web app  → Deployment + Service + Ingress + HPA
+#   - postgres : PostGIS 16  (stateful)           → Deployment + PVC + Service
+#   - mongodb  : MongoDB 7   (stateful)           → Deployment + PVC + Service
+#
+# The ETL / PySpark / analysis batch jobs are NOT deployed here — they run on
+# local Docker and (optionally) load data into these in-cluster databases.
+#
+# Images are pulled from the cluster's private registry (same precedent as the
+# myapp MySQL image). The two stock DB images must be mirrored once:
+#   nerdctl pull postgis/postgis:16-3.4 && nerdctl tag ... 10.0.9.227:5000/postgis:16-3.4 && nerdctl push --insecure-registry ...
+#   nerdctl pull mongo:7.0              && nerdctl tag ... 10.0.9.227:5000/mongo:7.0      && nerdctl push --insecure-registry ...
+# ═══════════════════════════════════════════════════════════════════════════════
+
+imagePullSecrets: []
+
+# Keep app pods off the ingress/monitoring nodes (same policy as myapp).
+nodeAffinityRoleExclude:
+  - ingress
+  - monitoring
+
+# ── Frontend (Next.js) ────────────────────────────────────────
+frontend:
+  replicaCount: 2
+
+  image:
+    repository: 10.0.9.227:5000/homepedia-frontend   # built & pushed by the deploy flow
+    tag: "v0.1.0"                                     # overridden per-env
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000   # Next.js standalone server listens on 3000
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+  probes:
+    readiness:
+      path: /
+    liveness:
+      path: /
+
+  # Public Mapbox token (NEXT_PUBLIC_*). Public by design — safe in the ConfigMap.
+  # NB: NEXT_PUBLIC_* is inlined at *build* time, so for it to reach the browser
+  # bundle it must also be passed as a build-arg when the image is built.
+  mapboxAccessToken: ""
+
+# ── Ingress ───────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: homepedia.kubequest.local
+  path: /
+  pathType: Prefix
+  # TLS via cert-manager's CA issuer (same setup as myapp). Off by default; the
+  # dev/prod values turn it on. sslRedirect off so plain HTTP keeps working too.
+  tls:
+    enabled: false
+    clusterIssuer: kubequest-ca
+    sslRedirect: false
+    secretName: ""   # defaults to <release>-homepedia-tls
+
+# ── PostgreSQL + PostGIS ──────────────────────────────────────
+postgres:
+  enabled: true
+  image:
+    repository: 10.0.9.227:5000/postgis
+    tag: "16-3.4"
+    pullPolicy: IfNotPresent
+  auth:
+    database: homepedia
+    username: homepedia_user
+    # password lives in the Secret (see secret.* below)
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Run the SQL in files/postgres-init/ on first init (empty data dir only).
+  initScripts: true
+
+# ── MongoDB ───────────────────────────────────────────────────
+mongodb:
+  enabled: true
+  image:
+    repository: 10.0.9.227:5000/mongo
+    tag: "7.0"
+    pullPolicy: IfNotPresent
+  auth:
+    database: homepedia
+    rootUser: homepedia_user
+    # rootPassword lives in the Secret (see secret.* below)
+  persistence:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Run the JS in files/mongo-init/ on first init.
+  initScripts: true
+
+# ── Secrets (injected at deploy time — never committed) ────────
+# create=true : the chart renders the Secret from the values below (local Helm).
+# create=false: the Secret is assumed to already exist in the namespace
+#               (the ArgoCD GitOps flow — see infra-gitops/argocd/).
+secret:
+  create: true
+  pgPassword: ""        # frontend PG_PASSWORD + postgres POSTGRES_PASSWORD
+  mongoRootPassword: "" # mongo root password; also embedded into mongo-uri
+
+# ── Network policy (bonus: restrict DB access to the frontend) ─
+# Default-deny ingress to postgres/mongo, allowing only the frontend pods.
+# Off by default; enable per-environment after confirming the app stays healthy.
+networkPolicy:
+  enabled: false
