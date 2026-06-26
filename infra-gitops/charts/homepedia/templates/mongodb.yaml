@@ -66,18 +66,23 @@ spec:
               value: {{ .Values.mongodb.auth.database | quote }}
           resources:
             {{- toYaml .Values.mongodb.resources | nindent 12 }}
+          # mongosh has a slow (Node.js) cold start — needs a generous timeout,
+          # otherwise the default timeoutSeconds:1 makes every probe "time out"
+          # even though mongod is healthy.
           readinessProbe:
             exec:
               command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-            initialDelaySeconds: 15
-            periodSeconds: 10
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
             failureThreshold: 6
           livenessProbe:
             exec:
               command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-            initialDelaySeconds: 30
-            periodSeconds: 15
-            failureThreshold: 3
+            initialDelaySeconds: 45
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
           volumeMounts:
             - name: data
               mountPath: /data/db
