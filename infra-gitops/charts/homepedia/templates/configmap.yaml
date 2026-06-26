@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "homepedia.fullname" . }}-config
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+data:
+  NODE_ENV: "production"
+  # lib/db.ts (raw pg pool)
+  PG_HOST: {{ include "homepedia.postgresHost" . | quote }}
+  PG_PORT: "5432"
+  PG_DB: {{ .Values.postgres.auth.database | quote }}
+  PG_USER: {{ .Values.postgres.auth.username | quote }}
+  # lib/prisma.ts (Prisma + @prisma/adapter-pg)
+  POSTGRES_HOST: {{ include "homepedia.postgresHost" . | quote }}
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: {{ .Values.postgres.auth.database | quote }}
+  POSTGRES_USER: {{ .Values.postgres.auth.username | quote }}
+  # lib/mongo.ts (MONGO_URI is sensitive → it lives in the Secret)
+  MONGO_DB: {{ .Values.mongodb.auth.database | quote }}
+  # Public Mapbox token (client-side; see values.yaml note about build-time inlining)
+  NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN: {{ .Values.frontend.mapboxAccessToken | quote }}
+{{- if and .Values.postgres.enabled .Values.postgres.initScripts }}
+---
+# PostGIS init scripts — mounted into /docker-entrypoint-initdb.d (runs on first init).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "homepedia.fullname" . }}-postgres-init
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/postgres-init/*").AsConfig | indent 2 }}
+{{- end }}
+{{- if and .Values.mongodb.enabled .Values.mongodb.initScripts }}
+---
+# Mongo init scripts — mounted into /docker-entrypoint-initdb.d (runs on first init).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "homepedia.fullname" . }}-mongo-init
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/mongo-init/*").AsConfig | indent 2 }}
+{{- end }}

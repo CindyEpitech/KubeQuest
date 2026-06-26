@@ -1,0 +1,20 @@
+# Production overrides consumed by the ArgoCD "homepedia" Application.
+# This is the file the promote workflow bumps to roll out a new image tag.
+frontend:
+  image:
+    repository: 10.0.9.227:5000/homepedia-frontend
+    tag: v0.1.1
+
+# Secrets are pre-created in the homepedia namespace (not managed by GitOps).
+# See infra-gitops/argocd/README.md.
+secret:
+  create: false
+
+# TLS on homepedia.kubequest.local via cert-manager's CA issuer.
+ingress:
+  tls:
+    enabled: true
+
+# Lock DB access to the frontend only (bonus). Validated on dev first.
+networkPolicy:
+  enabled: true
