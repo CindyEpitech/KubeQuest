@@ -81,6 +81,15 @@ kubectl -n <ns> create secret generic homepedia-homepedia-secret \
 > frontend shows real data only once the local ETL/PySpark jobs load it (or a
 > dump is restored into the in-cluster DBs).
 
+The frontend image is built by `scripts/deploy-homepedia.sh` from the HomePedia
+**app repo** (a different org). kube-1's deploy key only reaches KubeQuest, so the
+app repo is cloned over HTTPS with a fine-grained PAT (`Contents: read`). Create
+it once on kube-1:
+
+```bash
+printf '%s' '<fine-grained-PAT>' > ~/.homepedia_token && chmod 600 ~/.homepedia_token
+```
+
 ## Install (one-time)
 
 ArgoCD must be installed *before* the Application CRs, so this is two steps.
