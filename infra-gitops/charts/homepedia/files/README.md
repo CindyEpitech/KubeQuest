@@ -1,7 +1,7 @@
 # Chart-embedded init scripts
 
 These files are a **snapshot** copied from the HomePedia app repo
-(`EpitechMscProPromo2026/T-DAT-902-NCE_1`):
+(`CindyEpitech/HomePedia`):
 
 | Here | Source in the app repo |
 |------|------------------------|

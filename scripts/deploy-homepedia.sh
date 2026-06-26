@@ -10,7 +10,7 @@ set -euo pipefail
 #  pushes to `develop`. ArgoCD app `homepedia-dev` watches the repo and rolls the
 #  change out into ns homepedia-dev on its own — the git push IS the deploy.
 #
-#  HomePedia is its OWN repo (EpitechMscProPromo2026/T-DAT-902-NCE_1). The
+#  HomePedia is its OWN repo (CindyEpitech/HomePedia). The
 #  frontend image is built from THAT repo on kube-1; KubeQuest only holds the
 #  Helm chart + GitOps wiring. kube-1's deploy key only reaches KubeQuest, so the
 #  app repo is cloned over HTTPS using a fine-grained PAT (Contents: read) kept
@@ -47,7 +47,9 @@ CHART_DIR="infra-gitops/charts/homepedia"
 # HomePedia app lives in its OWN repo — the frontend image is built from there.
 # kube-1's deploy key is scoped to KubeQuest only, so the app repo is cloned over
 # HTTPS using a fine-grained PAT (Contents: read) stored on kube-1, NOT committed.
-HOMEPEDIA_REPO_HTTPS="https://github.com/EpitechMscProPromo2026/T-DAT-902-NCE_1.git"
+HOMEPEDIA_REPO_HTTPS="https://github.com/CindyEpitech/HomePedia.git"
+# Same URL with the username injected; the PAT is supplied by GIT_ASKPASS, not here.
+HOMEPEDIA_AUTH_URL="${HOMEPEDIA_REPO_HTTPS/https:\/\//https://x-access-token@}"
 HOMEPEDIA_TOKEN_FILE="\$HOME/.homepedia_token"  # on kube-1; expanded remotely
 HOMEPEDIA_DIR="/home/ec2-user/homepedia"  # build checkout on kube-1
 HOMEPEDIA_REF="${HOMEPEDIA_REF:-main}"    # branch/tag of the app repo to build
@@ -208,7 +210,7 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ec2-user@"$KUBE1_IP" bash <<REMOTE
   chmod +x "\$ASKPASS"
   export GIT_ASKPASS="\$ASKPASS" GIT_TERMINAL_PROMPT=0
   # Username embedded; password comes from GIT_ASKPASS (the token).
-  AUTH_URL="https://x-access-token@github.com/EpitechMscProPromo2026/T-DAT-902-NCE_1.git"
+  AUTH_URL="$HOMEPEDIA_AUTH_URL"
 
   if [ ! -d "$HOMEPEDIA_DIR/.git" ]; then rm -rf "$HOMEPEDIA_DIR"; echo "  Cloning homepedia app repo (HTTPS+PAT)..."; git clone "\$AUTH_URL" "$HOMEPEDIA_DIR"; fi
   cd "$HOMEPEDIA_DIR"
