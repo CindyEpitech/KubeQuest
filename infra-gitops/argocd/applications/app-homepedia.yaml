@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: homepedia
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CindyEpitech/KubeQuest.git
+    targetRevision: main
+    path: infra-gitops/charts/homepedia
+    helm:
+      releaseName: homepedia
+      valueFiles:
+        - values-production.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: homepedia
+  # The HPA owns the frontend replica count, so don't let selfHeal fight it.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: homepedia-homepedia
+      jsonPointers:
+        - /spec/replicas
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

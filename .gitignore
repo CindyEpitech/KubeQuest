@@ -4,3 +4,8 @@
 
 # Local plaintext secrets dump — never commit
 documentation/CREDENTIALS.md
+
+# HomePedia app lives in its own repo (EpitechMscProPromo2026/T-DAT-902-NCE_1).
+# A local copy may sit here for convenience, but it is built from its own repo
+# (see scripts/deploy-homepedia.sh) — never commit it into KubeQuest.
+/homepedia/
