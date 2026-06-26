@@ -70,18 +70,24 @@ spec:
               value: /var/lib/postgresql/data/pgdata
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
+          # timeoutSeconds defaults to 1, which pg_isready can exceed when the
+          # server is busy (large COPY / index builds) — that was killing the pod
+          # mid-load. Give it headroom and a tolerant liveness so a busy DB isn't
+          # mistaken for a dead one.
           readinessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}"]
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 6
           livenessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}"]
             initialDelaySeconds: 30
-            periodSeconds: 15
-            failureThreshold: 3
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
