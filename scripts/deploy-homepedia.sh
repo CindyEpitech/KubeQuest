@@ -12,7 +12,10 @@ set -euo pipefail
 #
 #  HomePedia is its OWN repo (EpitechMscProPromo2026/T-DAT-902-NCE_1). The
 #  frontend image is built from THAT repo on kube-1; KubeQuest only holds the
-#  Helm chart + GitOps wiring. kube-1's git identity must be able to clone both.
+#  Helm chart + GitOps wiring. kube-1's deploy key only reaches KubeQuest, so the
+#  app repo is cloned over HTTPS using a fine-grained PAT (Contents: read) kept
+#  on kube-1 at ~/.homepedia_token (chmod 600, never committed). Create it once:
+#    printf '%s' '<fine-grained-PAT>' > ~/.homepedia_token && chmod 600 ~/.homepedia_token
 #
 #  Only the frontend is built here. The in-cluster Postgres/Mongo use stock
 #  images mirrored into the registry once (see infra-gitops/argocd/README.md);
@@ -42,7 +45,10 @@ IMAGE_NAME="homepedia-frontend"          # registry repo for the frontend image
 REPO_SSH="git@github.com:CindyEpitech/KubeQuest.git"   # infra/GitOps repo (values bump)
 CHART_DIR="infra-gitops/charts/homepedia"
 # HomePedia app lives in its OWN repo — the frontend image is built from there.
-HOMEPEDIA_REPO_SSH="git@github.com:EpitechMscProPromo2026/T-DAT-902-NCE_1.git"
+# kube-1's deploy key is scoped to KubeQuest only, so the app repo is cloned over
+# HTTPS using a fine-grained PAT (Contents: read) stored on kube-1, NOT committed.
+HOMEPEDIA_REPO_HTTPS="https://github.com/EpitechMscProPromo2026/T-DAT-902-NCE_1.git"
+HOMEPEDIA_TOKEN_FILE="\$HOME/.homepedia_token"  # on kube-1; expanded remotely
 HOMEPEDIA_DIR="/home/ec2-user/homepedia"  # build checkout on kube-1
 HOMEPEDIA_REF="${HOMEPEDIA_REF:-main}"    # branch/tag of the app repo to build
 FRONTEND_SUBDIR="apps/frontend"           # within the homepedia repo
@@ -186,8 +192,27 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ec2-user@"$KUBE1_IP" bash <<REMOTE
     sleep 3
   fi
   ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
-  if [ ! -d "$HOMEPEDIA_DIR/.git" ]; then rm -rf "$HOMEPEDIA_DIR"; echo "  Cloning homepedia app repo..."; git clone "$HOMEPEDIA_REPO_SSH" "$HOMEPEDIA_DIR"; fi
+
+  # App repo is private and in another org — clone over HTTPS with a fine-grained
+  # PAT read from $HOMEPEDIA_TOKEN_FILE. GIT_ASKPASS feeds the token as the
+  # password so it never appears in process args or in .git/config.
+  TOKEN_FILE="$HOMEPEDIA_TOKEN_FILE"
+  if [ ! -s "\$TOKEN_FILE" ]; then
+    echo "  ERROR: PAT file \$TOKEN_FILE missing/empty on kube-1." >&2
+    echo "         Create it: printf '%s' '<fine-grained-PAT>' > \$TOKEN_FILE && chmod 600 \$TOKEN_FILE" >&2
+    exit 1
+  fi
+  ASKPASS="\$(mktemp)"
+  trap 'rm -f "\$ASKPASS"' EXIT
+  printf '#!/bin/sh\ncat "%s"\n' "\$TOKEN_FILE" > "\$ASKPASS"
+  chmod +x "\$ASKPASS"
+  export GIT_ASKPASS="\$ASKPASS" GIT_TERMINAL_PROMPT=0
+  # Username embedded; password comes from GIT_ASKPASS (the token).
+  AUTH_URL="https://x-access-token@github.com/EpitechMscProPromo2026/T-DAT-902-NCE_1.git"
+
+  if [ ! -d "$HOMEPEDIA_DIR/.git" ]; then rm -rf "$HOMEPEDIA_DIR"; echo "  Cloning homepedia app repo (HTTPS+PAT)..."; git clone "\$AUTH_URL" "$HOMEPEDIA_DIR"; fi
   cd "$HOMEPEDIA_DIR"
+  git remote set-url origin "\$AUTH_URL"   # token-free URL; GIT_ASKPASS supplies it
   git fetch origin --quiet
   git checkout "$HOMEPEDIA_REF"
   git reset --hard "origin/$HOMEPEDIA_REF"
