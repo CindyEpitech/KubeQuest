@@ -105,18 +105,22 @@ spec:
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
 
+          # TCP checks, NOT httpGet on "/": the home page is force-dynamic and runs
+          # heavy DB aggregations, so probing it exceeded timeoutSeconds:1 (and 500'd
+          # under load) → liveness restart-looped the pods. A TCP check confirms the
+          # Next server is listening without doing expensive work.
           readinessProbe:
-            httpGet:
-              path: {{ .Values.frontend.probes.readiness.path }}
+            tcpSocket:
               port: http
-            initialDelaySeconds: 15
-            periodSeconds: 5
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
             failureThreshold: 6
 
           livenessProbe:
-            httpGet:
-              path: {{ .Values.frontend.probes.liveness.path }}
+            tcpSocket:
               port: http
             initialDelaySeconds: 30
-            periodSeconds: 10
-            failureThreshold: 3
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
