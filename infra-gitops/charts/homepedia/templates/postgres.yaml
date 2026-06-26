@@ -1,0 +1,125 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "homepedia.postgresHost" . }}-data
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "homepedia.postgresHost" . }}
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single RWO volume — never run two writers at once
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: postgres
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: role
+                    operator: NotIn
+                    values:
+                      {{- toYaml .Values.nodeAffinityRoleExclude | nindent 22 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "homepedia.fullname" . }}-secret
+                  key: pg-password
+            # Keep data in a subdir so a non-empty volume root (lost+found) doesn't
+            # block initdb.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          # timeoutSeconds defaults to 1, which pg_isready can exceed when the
+          # server is busy (large COPY / index builds) — that was killing the pod
+          # mid-load. Give it headroom and a tolerant liveness so a busy DB isn't
+          # mistaken for a dead one.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            {{- if .Values.postgres.initScripts }}
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "homepedia.postgresHost" . }}-data
+        {{- if .Values.postgres.initScripts }}
+        - name: init
+          configMap:
+            name: {{ include "homepedia.fullname" . }}-postgres-init
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "homepedia.postgresHost" . }}
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgres
+{{- end }}

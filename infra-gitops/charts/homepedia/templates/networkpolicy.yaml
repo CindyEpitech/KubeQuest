@@ -1,0 +1,51 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny ingress to the databases, allowing only the frontend pods.
+# Calico enforces this (same setup as myapp's MySQL policy).
+{{- if .Values.postgres.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "homepedia.postgresHost" . }}-allow-frontend
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "homepedia.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}
+{{- if .Values.mongodb.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "homepedia.mongoHost" . }}-allow-frontend
+  labels:
+    {{- include "homepedia.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mongodb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "homepedia.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 27017
+{{- end }}
+{{- end }}

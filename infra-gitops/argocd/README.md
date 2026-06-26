@@ -18,6 +18,8 @@ pull-based, self-healing loop and a visual UI.
 | `applications/app-infra.yaml` | Application tracking `infra-gitops/overlays/production` (kustomize) |
 | `applications/app-myapp.yaml` | **prod** app: chart on `main` → `myapp` namespace (`values-production.yaml`) |
 | `applications/app-myapp-dev.yaml` | **dev** app: chart on `develop` → `myapp-dev` namespace (`values-dev.yaml`) |
+| `applications/app-homepedia.yaml` | **prod** app: HomePedia chart on `main` → `homepedia` namespace (`values-production.yaml`) |
+| `applications/app-homepedia-dev.yaml` | **dev** app: HomePedia chart on `develop` → `homepedia-dev` namespace (`values-dev.yaml`) |
 
 All `automated.prune=true` + `automated.selfHeal=true`.
 
@@ -29,6 +31,8 @@ The app runs as two ArgoCD Applications, one per branch:
 |-----|--------|-----------|--------------|--------|
 | `myapp` (prod) | `main` | `myapp` | `app.kubequest.local` | `values-production.yaml` |
 | `myapp-dev` | `develop` | `myapp-dev` | `app-dev.kubequest.local` | `values-dev.yaml` |
+| `homepedia` (prod) | `main` | `homepedia` | `homepedia.kubequest.local` | `values-production.yaml` |
+| `homepedia-dev` | `develop` | `homepedia-dev` | `homepedia-dev.kubequest.local` | `values-dev.yaml` |
 
 Push to `develop` → dev updates. Merge to `main` → prod updates. Each namespace
 gets its **own** standalone MySQL (`mysql.enabled=false`), so the data is
@@ -49,6 +53,41 @@ kubectl -n <ns> create secret generic myapp-db-secret \
 # 2. After the app + MySQL are up, migrate + seed the fresh DB once
 #    (run as a one-off Job using the app image — see app-dev bootstrap history,
 #     or: php artisan migrate --force --seed)
+```
+
+### Bootstrapping HomePedia (`homepedia` / `homepedia-dev`)
+
+HomePedia ships its own in-cluster PostGIS + MongoDB (`postgres.enabled` /
+`mongodb.enabled`), so each namespace is isolated. Two prerequisites before the
+app can sync healthy:
+
+```bash
+# 1. Pre-create the secret (chart uses secret.create=false under GitOps).
+#    mongo-uri must embed the same mongo creds + the in-cluster service host.
+kubectl -n <ns> create secret generic homepedia-homepedia-secret \
+  --from-literal=pg-password="$PG_PASSWORD" \
+  --from-literal=mongo-root-password="$MONGO_PASSWORD" \
+  --from-literal=mongo-uri="mongodb://homepedia_user:$MONGO_PASSWORD@homepedia-mongodb:27017/?authSource=admin"
+
+# 2. Mirror the stock DB images into the private registry once (the cluster pulls
+#    from 10.0.9.227:5000, same as myapp's mysql). Run on kube-1:
+#    nerdctl pull postgis/postgis:16-3.4
+#    nerdctl tag  postgis/postgis:16-3.4 10.0.9.227:5000/postgis:16-3.4
+#    nerdctl push --insecure-registry 10.0.9.227:5000/postgis:16-3.4
+#    (repeat for mongo:7.0 -> 10.0.9.227:5000/mongo:7.0)
+```
+
+> Postgres/Mongo start **empty** — the init scripts create the schema, but the
+> frontend shows real data only once the local ETL/PySpark jobs load it (or a
+> dump is restored into the in-cluster DBs).
+
+The frontend image is built by `scripts/deploy-homepedia.sh` from the HomePedia
+**app repo** (a different org). kube-1's deploy key only reaches KubeQuest, so the
+app repo is cloned over HTTPS with a fine-grained PAT (`Contents: read`). Create
+it once on kube-1:
+
+```bash
+printf '%s' '<fine-grained-PAT>' > ~/.homepedia_token && chmod 600 ~/.homepedia_token
 ```
 
 ## Install (one-time)
