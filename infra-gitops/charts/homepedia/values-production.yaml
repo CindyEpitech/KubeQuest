@@ -3,7 +3,34 @@
 frontend:
   image:
     repository: 10.0.9.227:5000/homepedia-frontend
-    tag: v0.1.0
+    tag: v0.1.1
+  # Single shared worker node: a 2-replica HA frontend + the surge pod doesn't fit
+  # (node ~93% memory) and the maxUnavailable:0 rollout deadlocks. HA isn't real on
+  # one node anyway, so pin to a single replica. HPA must drive replicas to 1
+  # because the Application ignores /spec/replicas.
+  replicaCount: 1
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 1
+
+# Right-size the DBs down for the shared worker node (same as dev).
+postgres:
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "192Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+mongodb:
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "160Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
 
 # Secrets are pre-created in the homepedia namespace (not managed by GitOps).
 # See infra-gitops/argocd/README.md.
