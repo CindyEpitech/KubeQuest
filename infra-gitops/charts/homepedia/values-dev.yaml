@@ -11,10 +11,12 @@ frontend:
     enabled: true
     minReplicas: 1
     maxReplicas: 1
-  # INTERIM: the /api/geo/prices/communes default view serialises full-resolution
-  # geometry for all ~35k communes (~26MB) and heap-OOMs the 512Mi pod. Bumped to
-  # 1Gi so the map works until the frontend image ships geometry simplification
-  # (ST_SimplifyPreserveTopology) — revert to base 512Mi once that image is live.
+  # 1Gi (NOT the base 512Mi): the /api/geo/prices/communes default view returns all
+  # ~35k communes in one response. v0.1.2 simplified the geometry (ST_Simplify...,
+  # 26MB->6.7MB), but ~13MB of per-feature properties remain, so the response is
+  # still ~20MB and peaks ~446MiB RSS under concurrent load (measured on v0.1.2).
+  # That is too close to 512Mi to be safe. Do NOT drop to 512Mi unless the response
+  # is trimmed further (e.g. fewer default properties / server-side paging).
   resources:
     requests:
       cpu: "100m"
