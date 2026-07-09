@@ -3,7 +3,7 @@
 # standalone MySQL (mysql.enabled=false => the chart ships its own MySQL).
 image:
   repository: 10.0.9.227:5000/myapp
-  tag: v1.0.5
+  tag: v1.0.6
 
 # Secrets are pre-created in the myapp-dev namespace (not managed by GitOps).
 secret:
