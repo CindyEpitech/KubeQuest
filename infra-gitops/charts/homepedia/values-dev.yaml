@@ -3,7 +3,7 @@
 frontend:
   image:
     repository: 10.0.9.227:5000/homepedia-frontend
-    tag: v0.1.1
+    tag: v0.1.4
   # Single memory-constrained worker node: no HA in dev, pin to one pod. The HPA
   # must actively drive replicas to 1 because the ArgoCD app ignores /spec/replicas.
   replicaCount: 1
@@ -11,6 +11,19 @@ frontend:
     enabled: true
     minReplicas: 1
     maxReplicas: 1
+  # 1Gi (NOT the base 512Mi): the /api/geo/prices/communes default view returns all
+  # ~35k communes in one response. v0.1.2 simplified the geometry (ST_Simplify...,
+  # 26MB->6.7MB), but ~13MB of per-feature properties remain, so the response is
+  # still ~20MB and peaks ~446MiB RSS under concurrent load (measured on v0.1.2).
+  # That is too close to 512Mi to be safe. Do NOT drop to 512Mi unless the response
+  # is trimmed further (e.g. fewer default properties / server-side paging).
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
 
 # Secrets are pre-created in the homepedia-dev namespace (not managed by GitOps).
 secret:

@@ -219,8 +219,13 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no ec2-user@"$KUBE1_IP" bash <<REMOTE
   git checkout "$HOMEPEDIA_REF"
   git reset --hard "origin/$HOMEPEDIA_REF"
   cd "$HOMEPEDIA_DIR/$FRONTEND_SUBDIR"
+  # Next.js inlines NEXT_PUBLIC_* at build time, so the Mapbox token must be a
+  # build-arg (runtime env never reaches the browser bundle). It's the committed
+  # public pk. token from the app repo's .env.example.
+  MAPBOX_TOKEN="\$(grep -m1 '^NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN=' "$HOMEPEDIA_DIR/.env.example" | cut -d= -f2- || true)"
+  [ -z "\$MAPBOX_TOKEN" ] && echo "  WARN: no Mapbox token in .env.example — map tiles won't render"
   echo "  Building image ($DOCKERFILE from homepedia@$HOMEPEDIA_REF)..."
-  sudo nerdctl build -f $DOCKERFILE -t $REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
+  sudo nerdctl build -f $DOCKERFILE --build-arg NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN="\$MAPBOX_TOKEN" -t $REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
   echo "  Pushing image..."
   sudo nerdctl push --insecure-registry $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
 REMOTE

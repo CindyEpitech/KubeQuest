@@ -12,7 +12,8 @@
             crossorigin="anonymous"></script>
         <style>
             :root {
-                --card: #ffffff;
+                --card: blue;
+                // --card: #ffffff;
                 --border: #e2e8f0;
                 --text: #0f172a;
                 --muted: #64748b;
@@ -32,7 +33,8 @@
                 margin: 0;
                 display: flex;
                 flex-direction: column;
-                background-color: var(--card);
+                background-color: blue;
+                // background-color: white;
                 color: var(--text);
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
                     Roboto, Helvetica, Arial, sans-serif;
