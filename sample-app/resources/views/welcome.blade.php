@@ -33,7 +33,7 @@
                 margin: 0;
                 display: flex;
                 flex-direction: column;
-                background-color: blue;
+                background-color: white;
                 // background-color: white;
                 color: var(--text);
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
