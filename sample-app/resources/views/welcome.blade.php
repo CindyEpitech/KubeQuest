@@ -12,8 +12,7 @@
             crossorigin="anonymous"></script>
         <style>
             :root {
-                --card: blue;
-                // --card: #ffffff;
+                --card: #ffffff;
                 --border: #e2e8f0;
                 --text: #0f172a;
                 --muted: #64748b;
